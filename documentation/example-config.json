@@ -1,0 +1,7 @@
+{
+  "cerebras_api_key": "sk-your-api-key",
+  "timeout_secs": 30,
+  "max_tokens": 2048,
+  "classifier_model": "llama-3.3-70b",
+  "planner_model": "qwen-3-235b"
+}
