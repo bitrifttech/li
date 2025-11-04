@@ -14,6 +14,7 @@ Based on PRD discussion and clarifications:
 - **Testing Strategy**: Real API for integration tests, unit tests for everything else
 - **Context Scope**: Single-request only (no multi-turn memory)
 - **Output**: Stream directly to user's terminal (inherit stdio)
+- **Cerebras API Endpoint**: `https://api.cerebras.ai/v1/chat/completions`
 
 ---
 
@@ -109,7 +110,7 @@ CEREBRAS_API_KEY=override-key cargo run -- --help
 **Goal**: Async HTTP client that can call Cerebras API.
 
 **Implementation** (`src/cerebras.rs`):
-- Define `CerebrasClient` struct with API key and base URL
+- Define `CerebrasClient` struct with API key and base URL (`https://api.cerebras.ai/v1/chat/completions`)
 - Implement request/response types:
   ```rust
   pub struct ChatRequest {
@@ -123,7 +124,10 @@ CEREBRAS_API_KEY=override-key cargo run -- --help
       pub choices: Vec<Choice>,
   }
   ```
-- Implement `CerebrasClient::chat_completion()` method
+- Implement `CerebrasClient::chat_completion()` method that:
+  - Issues a POST to `https://api.cerebras.ai/v1/chat/completions`
+  - Sends JSON body `{ "model": ..., "messages": [...] }`
+  - Includes headers `Authorization: Bearer <API KEY>` and `Content-Type: application/json`
 - Handle timeouts and network errors
 - Add retry logic (1 retry on failure)
 
@@ -133,6 +137,17 @@ CEREBRAS_API_KEY=override-key cargo run -- --help
 cargo run -- --test-api
 # Should successfully call API and print response
 # (requires valid CEREBRAS_API_KEY)
+
+# Optional cURL verification using the same endpoint
+curl --location 'https://api.cerebras.ai/v1/chat/completions' \
+  --header 'Content-Type: application/json' \
+  --header "Authorization: Bearer ${CEREBRAS_API_KEY}" \
+  --data '{
+    "model": "llama-3.3-70b",
+    "messages": [
+      {"role": "user", "content": "Tell me a fun fact about space."}
+    ]
+  }'
 ```
 
 ### Milestone 2.2: JSON Response Parsing
