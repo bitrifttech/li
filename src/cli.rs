@@ -233,6 +233,11 @@ async fn run_command(cmd: &str) -> Result<bool> {
     let mut child = TokioCommand::new("sh")
         .arg("-c")
         .arg(cmd)
+        .env("FORCE_COLOR", "1")           // Generic color forcing (npm, yarn, etc.)
+        .env("CLICOLOR_FORCE", "1")        // BSD/macOS color forcing
+        .env("COLORTERM", "truecolor")     // Advertise true color support
+        .env("TERM", "xterm-256color")     // 256 color support
+        .env("GIT_CONFIG_PARAMETERS", "'color.ui=always'")  // Force git colors
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
