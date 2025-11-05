@@ -8,6 +8,7 @@
 - 🛡️ **Safe Execution**: Every plan is previewed before execution
 - 🎯 **Smart Classification**: Automatically distinguishes between shell commands and natural language tasks
 - 💬 **Direct AI Chat**: Use `--chat` flag for conversational AI assistance
+- 🧠 **AI Intelligence Mode**: Use `-i` flag to explain command outputs in human-friendly terms
 - 🔧 **Interactive Setup**: Easy first-time configuration with `li --setup`
 - 🎨 **Visual Separators**: Clear distinction between li output and command output
 - 📋 **Model Selection**: Choose from OpenRouter's free AI models
@@ -73,6 +74,12 @@ li 'find the 10 largest files in this folder'
 li --chat 'what is the capital of France?'
 li --chat 'explain quantum computing simply'
 
+# AI Intelligence Mode - explain command outputs
+li -i 'df -h'                    # Explain disk usage output
+li --intelligence 'ps aux'       # Understand running processes
+li -i 'mount'                    # Learn about mounted filesystems
+li -i 'ls -la'                   # Understand file permissions
+
 # Interactive model selection
 li --model
 li --model list
@@ -89,6 +96,8 @@ li config --planner-model minimax/minimax-m2:free
 li --help                    # Show all options
 li --setup                   # Interactive first-time setup
 li --chat "message"          # Direct AI conversation
+li -i "command"              # Explain command output with AI
+li --intelligence "command"  # Long form of -i flag
 li --model                   # Interactive model selection
 li --model list              # Show available models
 li --classify "command"      # Classify input only (for shell hooks)
@@ -128,6 +137,70 @@ li 'run the development server'
 li 'build the project for production'
 li 'run all tests'
 ```
+
+## 🧠 AI Intelligence Mode
+
+The **intelligence mode** (`-i` or `--intelligence`) helps you understand command outputs by running a command and then using AI to explain what the output means in human-friendly terms.
+
+### How It Works
+
+1. **Execute Command**: li runs your specified shell command
+2. **Capture Output**: Both stdout and stderr are collected
+3. **AI Explanation**: The output is sent to the AI model for analysis
+4. **Human-Friendly Breakdown**: Get explanations, insights, and warnings
+
+### Examples
+
+#### System Information
+```bash
+# Understand disk usage
+li -i "df -h"
+
+# Learn about mounted filesystems
+li --intelligence "mount"
+
+# Analyze running processes
+li -i "ps aux | head -20"
+```
+
+#### File Operations
+```bash
+# Understand file permissions
+li -i "ls -la /etc"
+
+# Analyze directory structure
+li --intelligence "tree -L 2"
+
+# Check file sizes
+li -i "du -sh * | sort -hr | head -10"
+```
+
+#### Network & System
+```bash
+# Network connections
+li -i "netstat -an | grep LISTEN"
+
+# System resources
+li --intelligence "top -l 1 | head -15"
+
+# Memory usage
+li -i "vm_stat"
+```
+
+### What You Get
+
+Each intelligence explanation provides:
+- **Simple Meaning**: What the output means in plain English
+- **Key Insights**: Important information and patterns
+- **Warnings**: Things to pay attention to or avoid
+- **Practical Understanding**: What you should do with this information
+
+### Use Cases
+
+- **Learning**: Understand unfamiliar commands
+- **Troubleshooting**: Get insights into system issues
+- **Security**: Analyze what's running on your system
+- **Optimization**: Identify resource usage patterns
 
 ## ⚙️ Configuration
 
