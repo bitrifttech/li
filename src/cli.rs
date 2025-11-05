@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use serde::Deserialize;
+use std::fs;
 use std::io::{self, Write};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
@@ -116,6 +117,10 @@ pub struct Cli {
     #[arg(short = 'm', long = "model")]
     pub model: Option<String>,
 
+    /// Interactive setup for first-time configuration
+    #[arg(long = "setup")]
+    pub setup: bool,
+
     /// Default task: words typed after `li`
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub task: Vec<String>,
@@ -173,6 +178,11 @@ pub struct ConfigArgs {
 
 impl Cli {
     pub async fn run(self, mut config: Config) -> Result<()> {
+        // Handle setup flag (no config required)
+        if self.setup {
+            return handle_setup().await;
+        }
+        
         // Handle model override
         if let Some(model_arg) = self.model {
             let models = fetch_openrouter_free_models(&config.api_key).await?;
@@ -526,6 +536,157 @@ async fn handle_config(args: ConfigArgs) -> Result<()> {
     println!("   Max Tokens: {}", config.max_tokens);
     println!("   Classifier Model: {}", config.classifier_model);
     println!("   Planner Model: {}", config.planner_model);
+    
+    Ok(())
+}
+
+async fn handle_setup() -> Result<()> {
+    println!("🚀 Welcome to li CLI Setup!");
+    println!("Let's configure your OpenRouter integration.\n");
+    
+    // Get API key
+    let api_key = loop {
+        print!("🔑 Enter your OpenRouter API key: ");
+        io::stdout().flush()?;
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let key = input.trim();
+        
+        if key.is_empty() {
+            println!("❌ API key cannot be empty. Please try again.");
+            continue;
+        }
+        
+        if key.starts_with("sk-or-v1") {
+            break key.to_string();
+        } else {
+            println!("⚠️  OpenRouter API keys typically start with 'sk-or-v1'. Are you sure this is correct?");
+            print!("Continue anyway? [y/N]: ");
+            io::stdout().flush()?;
+            
+            let mut confirm = String::new();
+            io::stdin().read_line(&mut confirm)?;
+            if confirm.trim().to_lowercase() == "y" {
+                break key.to_string();
+            }
+        }
+    };
+    
+    // Get timeout
+    let timeout = loop {
+        print!("⏱️  Enter timeout in seconds (default: 30): ");
+        io::stdout().flush()?;
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let timeout_str = input.trim();
+        
+        if timeout_str.is_empty() {
+            break 30u64;
+        }
+        
+        match timeout_str.parse::<u64>() {
+            Ok(timeout) if timeout > 0 => break timeout,
+            Ok(_) => println!("❌ Timeout must be a positive number."),
+            Err(_) => println!("❌ Please enter a valid number."),
+        }
+    };
+    
+    println!("\n📡 Fetching available free models from OpenRouter...");
+    let models = fetch_openrouter_free_models(&api_key).await?;
+    
+    println!("\n🤖 Available Free Models:\n");
+    for (idx, model) in models.iter().enumerate() {
+        let context_len = model.context_length
+            .map(|len| format!(" ({} context)", len))
+            .unwrap_or_default();
+        println!("  {}. {}{}", idx + 1, model.name, context_len);
+    }
+    
+    // Get classifier model
+    let classifier_model = loop {
+        print!("\n🧠 Select classifier model (determines if input is a command or needs planning): ");
+        io::stdout().flush()?;
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let choice = input.trim();
+        
+        if choice.is_empty() {
+            println!("❌ Please select a model number.");
+            continue;
+        }
+        
+        match choice.parse::<usize>() {
+            Ok(num) if num >= 1 && num <= models.len() => {
+                break models[num - 1].id.clone();
+            }
+            Ok(_) => println!("❌ Please enter a number between 1 and {}.", models.len()),
+            Err(_) => println!("❌ Please enter a valid number."),
+        }
+    };
+    
+    // Get planner model
+    let planner_model = loop {
+        print!("\n📋 Select planner model (creates shell commands from natural language): ");
+        io::stdout().flush()?;
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let choice = input.trim();
+        
+        if choice.is_empty() {
+            println!("❌ Please select a model number.");
+            continue;
+        }
+        
+        match choice.parse::<usize>() {
+            Ok(num) if num >= 1 && num <= models.len() => {
+                break models[num - 1].id.clone();
+            }
+            Ok(_) => println!("❌ Please enter a number between 1 and {}.", models.len()),
+            Err(_) => println!("❌ Please enter a valid number."),
+        }
+    };
+    
+    // Create config
+    let config = Config {
+        api_key,
+        timeout_secs: timeout,
+        max_tokens: 100000,
+        classifier_model: classifier_model.clone(),
+        planner_model: planner_model.clone(),
+    };
+    
+    // Save config
+    let config_path = Config::config_path()?;
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    
+    let config_json = serde_json::json!({
+        "openrouter_api_key": config.api_key,
+        "timeout_secs": config.timeout_secs,
+        "max_tokens": config.max_tokens,
+        "classifier_model": config.classifier_model,
+        "planner_model": config.planner_model,
+    });
+    
+    fs::write(&config_path, serde_json::to_string_pretty(&config_json)?)?;
+    
+    println!("\n✅ Configuration saved to {}", config_path.display());
+    println!("📋 Your configuration:");
+    println!("   Provider: OpenRouter");
+    println!("   API Key: {}***", &config.api_key[..config.api_key.len().min(8)]);
+    println!("   Timeout: {}s", config.timeout_secs);
+    println!("   Max Tokens: {}", config.max_tokens);
+    println!("   Classifier Model: {}", config.classifier_model);
+    println!("   Planner Model: {}", config.planner_model);
+    println!("\n🎉 Setup complete! You can now use 'li' with commands like:");
+    println!("   li 'list all files in current directory'");
+    println!("   li chat 'what is the capital of France?'");
+    println!("   li -m list  # to see available models\n");
     
     Ok(())
 }
