@@ -9,20 +9,36 @@ echo "🚀 Starting li release process..."
 VERSION=${1:-"0.1.1"}
 echo "📦 Releasing version: $VERSION"
 
-# 1. Commit and push changes to main repo
-echo "📝 Committing and pushing changes to main repository..."
+# 1. Commit and push changes to main repo (if there are changes)
+echo "📝 Checking for changes to commit..."
 cd /Users/matthew/bitrift/li
-git add .
-git commit -m "feat: update CLI to use --config flags instead of config subcommand
 
-- Replace 'li config' with 'li --config' command structure  
-- Add --api-key, --timeout, --max-tokens, --classifier-model, --planner-model flags
-- Update welcome message and README documentation
-- Improve configuration handling to preserve existing settings"
-git push
+# Check if there are any changes to commit
+if git diff --quiet && git diff --cached --quiet; then
+    echo "ℹ️  No changes to commit, proceeding with tag and push..."
+else
+    echo "📝 Committing and pushing changes to main repository..."
+    git add .
+    git commit -m "feat: add AI intelligence mode for command output explanation
+
+- Add -i/--intelligence flag to execute commands and explain outputs
+- Implement handle_intelligence function with command execution and AI analysis
+- Add comprehensive error handling for failed commands
+- Update welcome message with intelligence examples
+- Add detailed intelligence section to README with use cases and examples
+- Update command options documentation
+- Support both short (-i) and long (--intelligence) flag forms
+- Provide human-friendly explanations with insights, warnings, and practical understanding"
+    git push
+fi
 
 # 2. Create and push release tag
 echo "🏷️  Creating and pushing release tag..."
+if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+    echo "⚠️  Tag v$VERSION already exists, deleting and recreating..."
+    git tag -d "v$VERSION"
+    git push origin ":refs/tags/v$VERSION" || true
+fi
 git tag "v$VERSION"
 git push origin "v$VERSION"
 
