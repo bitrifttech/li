@@ -2,8 +2,8 @@ use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand};
 
 use crate::cerebras::{CerebrasClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
-use crate::classifier;
 use crate::config::Config;
+use crate::{classifier, planner};
 
 /// Entry point for the `li` command-line interface.
 #[derive(Debug, Parser)]
@@ -137,9 +137,36 @@ async fn handle_task(words: Vec<String>, config: &Config) -> Result<()> {
         }
         classifier::Classification::NaturalLanguage => {
             println!("Classification: NaturalLanguage");
-            println!("Suggested action: send to planner (not yet implemented).");
+            let plan =
+                planner::plan(&client, &prompt, &config.planner_model, config.max_tokens).await?;
+
+            render_plan(&plan);
         }
     }
 
     Ok(())
+}
+
+fn render_plan(plan: &planner::Plan) {
+    println!("\nPlan confidence: {:.2}", plan.confidence);
+
+    if !plan.dry_run_commands.is_empty() {
+        println!("\nDry-run Commands:");
+        for (idx, cmd) in plan.dry_run_commands.iter().enumerate() {
+            println!("  {}. {}", idx + 1, cmd);
+        }
+    }
+
+    if !plan.execute_commands.is_empty() {
+        println!("\nExecute Commands:");
+        for (idx, cmd) in plan.execute_commands.iter().enumerate() {
+            println!("  {}. {}", idx + 1, cmd);
+        }
+    }
+
+    if !plan.notes.trim().is_empty() {
+        println!("\nNotes: {}", plan.notes.trim());
+    }
+
+    println!("\nExecution not yet implemented. Preview only.");
 }
