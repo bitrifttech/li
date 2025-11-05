@@ -221,19 +221,19 @@ impl Cli {
             }
             
             println!("💡 How to use li:");
-            println!("   li --setup                                        # Interactive first-time setup");
-            println!("   li 'list all files in current directory'          # Plan & execute commands");
-            println!("   li --chat 'what is the capital of France?'        # Direct AI conversation");
-            println!("   li --classify 'git status'                        # Classify input only");
-            println!("   li -i 'df -h'                                     # Explain command output with AI");
-            println!("   li -i -q 'Which disk has the most space?' 'df -h' # Ask a question about output");
-            println!("   li --model                                        # Interactive model selection");
-            println!("   li --model list                                   # Show available models");
-            println!("   li --config --api-key YOUR_KEY                    # Set API key manually");
-            println!("   li --config --timeout 60                          # Set timeout in seconds");
-            println!("   li --config --max-tokens 4096                     # Set max tokens");
-            println!("   li --config --classifier-model MODEL              # Set classifier model");
-            println!("   li --config --planner-model MODEL                 # Set planner model");
+            println!("   li --setup                                         # Interactive first-time setup");
+            println!("   li 'list all files in current directory'           # Plan & execute commands");
+            println!("   li --chat 'what is the capital of France?'         # Direct AI conversation");
+            println!("   li --classify 'git status'                         # Classify input only");
+            println!("   li -i 'df -h'                                      # Explain command output with AI");
+            println!("   li -i -q 'Which disk has the most space?' 'df -h'  # Ask a question about output");
+            println!("   li --model                                         # Interactive model selection");
+            println!("   li --model list                                    # Show available models");
+            println!("   li --config --api-key YOUR_KEY                     # Set API key manually");
+            println!("   li --config --timeout 60                           # Set timeout in seconds");
+            println!("   li --config --max-tokens 4096                      # Set max tokens");
+            println!("   li --config --classifier-model MODEL               # Set classifier model");
+            println!("   li --config --planner-model MODEL                  # Set planner model");
             println!();
             
             if config_exists {
