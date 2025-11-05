@@ -201,10 +201,11 @@ impl Cli {
             let config_exists = config_path.exists();
             
             println!("🚀 Welcome to li - Your AI-Powered CLI Assistant!");
+        println!("   📱 Project: https://github.com/bitrifttech/li");
             println!();
             println!("📖 What li does:");
             println!("   • Converts natural language to shell commands");
-            println!("   • Classifies input as direct commands or planning tasks");
+            println!("   • Gives intellegent analysis of command output");
             println!("   • Executes safe, minimal command plans");
             println!("   • Powered by OpenRouter's free AI models");
             println!();

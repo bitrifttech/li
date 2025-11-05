@@ -1,5 +1,10 @@
 # li - AI-Powered CLI Assistant
 
+<!-- li Icon -->
+<p align="center">
+  <img src="resource/li_logo.png" alt="li Logo" width="120" height="120">
+</p>
+
 🚀 **li** is a lightweight terminal assistant that converts natural language to shell commands. Just type plain English like "make a new git repo" and li will generate a safe, minimal command plan for you to review and execute.
 
 ## ✨ Features

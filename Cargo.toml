@@ -2,6 +2,10 @@
 name = "li"
 version = "0.1.1"
 edition = "2024"
+description = "AI-powered CLI assistant that converts natural language to shell commands"
+repository = "https://github.com/bitrifttech/li"
+license = "MIT"
+authors = ["bitrifttech"]
 
 [dependencies]
 anyhow = "1.0"
