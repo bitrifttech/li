@@ -562,6 +562,10 @@ async fn run_command(cmd: &str) -> Result<bool> {
         cmd.to_string()
     };
     
+    // Print command output separator
+    println!("\n┌─ COMMAND OUTPUT: {}", cmd);
+    println!("│");
+    
     let mut child = TokioCommand::new("sh")
         .arg("-c")
         .arg(&modified_cmd)
@@ -590,13 +594,13 @@ async fn run_command(cmd: &str) -> Result<bool> {
 
     let stdout_handle = tokio::spawn(async move {
         while let Ok(Some(line)) = stdout_reader.next_line().await {
-            println!("{}", line);
+            println!("│ {}", line);
         }
     });
 
     let stderr_handle = tokio::spawn(async move {
         while let Ok(Some(line)) = stderr_reader.next_line().await {
-            eprintln!("{}", line);
+            eprintln!("│ {}", line);
         }
     });
 
@@ -608,14 +612,20 @@ async fn run_command(cmd: &str) -> Result<bool> {
     stderr_handle.await
         .map_err(|e| anyhow!("Failed to read command errors: {}", e))?;
 
-    if !status.success() {
+    // Print closing separator
+    if status.success() {
+        println!("│");
+        println!("└─ Command completed successfully");
+        Ok(true)
+    } else {
+        println!("│");
         if let Some(code) = status.code() {
+            println!("└─ Command failed with exit code {}", code);
             Err(anyhow!("Command failed with exit code {}: {}", code, cmd))
         } else {
+            println!("└─ Command was terminated by signal");
             Err(anyhow!("Command was terminated by signal: {}", cmd))
         }
-    } else {
-        Ok(true)
     }
 }
 
