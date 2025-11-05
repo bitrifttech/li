@@ -1,0 +1,402 @@
+# li - AI-Powered CLI Assistant
+
+🚀 **li** is a lightweight terminal assistant that converts natural language to shell commands. Just type plain English like "make a new git repo" and li will generate a safe, minimal command plan for you to review and execute.
+
+## ✨ Features
+
+- 🧠 **Natural Language to Commands**: Type plain English, get shell commands
+- 🛡️ **Safe Execution**: Every plan is previewed before execution
+- 🎯 **Smart Classification**: Automatically distinguishes between shell commands and natural language tasks
+- 💬 **Direct AI Chat**: Use `--chat` flag for conversational AI assistance
+- 🔧 **Interactive Setup**: Easy first-time configuration with `li --setup`
+- 🎨 **Visual Separators**: Clear distinction between li output and command output
+- 📋 **Model Selection**: Choose from OpenRouter's free AI models
+- 🪝 **Shell Hook Integration**: Optional zsh hook for seamless terminal experience
+
+## 🚀 Quick Start
+
+### Installation
+
+#### Option 1: Install from Source (Recommended)
+```bash
+git clone https://github.com/bitrifttech/li.git
+cd li
+./install.sh
+```
+
+#### Option 2: Install via Homebrew Tap
+```bash
+brew tap bitrifttech/homebrew-li
+brew install li
+```
+
+#### Option 3: Manual Cargo Install
+```bash
+cargo install --git https://github.com/bitrifttech/li.git
+```
+
+### First-Time Setup
+
+1. **Run interactive setup**:
+   ```bash
+   li --setup
+   ```
+   
+   This will guide you through:
+   - Setting up your OpenRouter API key
+   - Selecting classifier and planner models
+   - Configuring timeout and token limits
+
+2. **Get your OpenRouter API key**:
+   - Visit [https://openrouter.ai/](https://openrouter.ai/)
+   - Sign up for a free account
+   - Copy your API key (starts with `sk-or-v1-`)
+
+3. **Try it out**:
+   ```bash
+   li 'list all files in current directory'
+   li 'create a new git repository'
+   li 'show system disk usage'
+   ```
+
+## 📖 Usage
+
+### Basic Usage
+
+```bash
+# Plan and execute commands
+li 'list files in current directory'
+li 'make a new git repo and connect to GitHub'
+li 'find the 10 largest files in this folder'
+
+# Direct AI conversation
+li --chat 'what is the capital of France?'
+li --chat 'explain quantum computing simply'
+
+# Interactive model selection
+li --model
+li --model list
+
+# Manual configuration
+li config --api-key YOUR_OPENROUTER_API_KEY
+li config --classifier-model nvidia/nemotron-nano-12b-v2-vl:free
+li config --planner-model minimax/minimax-m2:free
+```
+
+### Command Options
+
+```bash
+li --help                    # Show all options
+li --setup                   # Interactive first-time setup
+li --chat "message"          # Direct AI conversation
+li --model                   # Interactive model selection
+li --model list              # Show available models
+li --classify "command"      # Classify input only (for shell hooks)
+li config                    # View current configuration
+```
+
+### Examples
+
+#### File Operations
+```bash
+li 'list all files including hidden ones'
+li 'create a backup of this directory'
+li 'find all Python files in current folder'
+li 'remove all .log files older than 30 days'
+```
+
+#### Git Operations
+```bash
+li 'initialize a new git repository'
+li 'add all files and make initial commit'
+li 'create a new branch called feature-x'
+li 'merge develop branch into main'
+```
+
+#### System Information
+```bash
+li 'show system disk usage'
+li 'list all mounted drives'
+li 'check system memory usage'
+li 'show running processes'
+```
+
+#### Development Tasks
+```bash
+li 'install npm dependencies'
+li 'run the development server'
+li 'build the project for production'
+li 'run all tests'
+```
+
+## ⚙️ Configuration
+
+### Configuration File
+
+li stores configuration in `~/.li/config` (JSON format):
+
+```json
+{
+  "openrouter_api_key": "sk-or-v1-your-api-key",
+  "timeout_secs": 30,
+  "max_tokens": 2048,
+  "classifier_model": "nvidia/nemotron-nano-12b-v2-vl:free",
+  "planner_model": "minimax/minimax-m2:free"
+}
+```
+
+### Environment Variables
+
+You can override configuration with environment variables:
+
+```bash
+export OPENROUTER_API_KEY="sk-or-v1-your-api-key"
+export LI_TIMEOUT_SECS="60"
+export LI_MAX_TOKENS="4096"
+export LI_CLASSIFIER_MODEL="nvidia/nemotron-nano-12b-v2-vl:free"
+export LI_PLANNER_MODEL="minimax/minimax-m2:free"
+```
+
+### Configuration Commands
+
+```bash
+# View current configuration
+li config
+
+# Set API key
+li config --api-key sk-or-v1-your-key
+
+# Set custom models
+li config --classifier-model nvidia/nemotron-nano-12b-v2-vl:free
+li config --planner-model minimax/minimax-m2:free
+
+# Adjust settings
+li config --timeout 60
+li config --max-tokens 4096
+```
+
+## 🤖 AI Models
+
+li uses OpenRouter's free AI models:
+
+### Default Models
+- **Classifier**: `nvidia/nemotron-nano-12b-v2-vl:free` - Fast, accurate command classification
+- **Planner**: `minimax/minimax-m2:free` - Intelligent shell command planning
+
+### Available Free Models
+```bash
+li --model list    # Show all available free models
+li --model         # Interactive model selection
+```
+
+## 🪝 Shell Integration (Optional)
+
+For a seamless experience, install the zsh hook to automatically route natural language through li:
+
+```bash
+# Install the hook
+li install
+
+# Restart your shell or run:
+source ~/.zshrc
+```
+
+After installation:
+- Type `ls -la` → Executes directly (classified as terminal command)
+- Type "show all files" → Routes through li (classified as natural language)
+
+```bash
+# Uninstall the hook
+li uninstall
+```
+
+## 🎨 Output Examples
+
+### Command Planning
+```bash
+$ li 'create a new git repository'
+
+Provider: OpenRouter
+Model: minimax/minimax-m2:free
+Plan confidence: 1.00
+
+Dry-run Commands:
+  1. git status
+
+Execute Commands:
+  1. git init
+  2. git add .
+  3. git commit -m "Initial commit"
+
+Notes: Created minimal git repo with initial commit.
+
+Execute this plan? [y/N]: y
+
+=== Executing Plan ===
+
+[Dry-run Phase]
+
+> Running check 1/1: git status
+
+┌─ COMMAND OUTPUT: git status
+│
+│ fatal: not a git repository (or any of the parent directories)
+│
+└─ Command completed successfully
+
+✓ All dry-run checks passed.
+
+[Execute Phase]
+
+> Executing 1/3: git init
+┌─ COMMAND OUTPUT: git init
+│
+│ Initialized empty Git repository in /path/to/repo/.git/
+│
+└─ Command completed successfully
+
+> Executing 2/3: git add .
+> Executing 3/3: git commit -m "Initial commit"
+
+✓ Plan execution completed.
+```
+
+### Direct Chat
+```bash
+$ li --chat "what is the capital of France?"
+
+Provider: OpenRouter
+Model: minimax/minimax-m2:free
+
+Choice 1:
+The capital of France is **Paris**. It's also famous for landmarks like the Eiffel Tower and the Louvre Museum.
+Finish reason: stop
+```
+
+## 🔧 Troubleshooting
+
+### Common Issues
+
+#### "Command not found" error
+```bash
+# Add cargo to PATH (if using cargo install)
+echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+#### API Key Issues
+```bash
+# Verify your API key is valid
+li config
+
+# Get a new key from https://openrouter.ai/
+li config --api-key sk-or-v1-your-new-key
+```
+
+#### Network Issues
+```bash
+# Test connectivity
+curl -I https://openrouter.ai/
+
+# Check if behind a proxy
+export HTTPS_PROXY=your-proxy-url
+```
+
+#### Build Issues
+```bash
+# Update Rust toolchain
+rustup update
+
+# Clean and rebuild
+cargo clean
+cargo build --release
+```
+
+### Debug Mode
+
+Set `LI_LOG_DIR` to enable debug logging:
+```bash
+export LI_LOG_DIR="/tmp/li-logs"
+li 'test command'
+# Logs will be written to /tmp/li-logs/
+```
+
+## 🏗️ Development
+
+### Building from Source
+
+```bash
+git clone https://github.com/bitrifttech/li.git
+cd li
+
+# Install dependencies
+cargo build
+
+# Run tests
+cargo test
+
+# Install locally
+cargo install --path .
+```
+
+### Project Structure
+
+```
+src/
+├── main.rs              # Entry point
+├── cli.rs               # CLI arguments and commands
+├── config.rs            # Configuration management
+├── client.rs            # OpenRouter API client
+├── classifier/          # Command classification logic
+├── planner/             # Command planning logic
+├── exec/                # Command execution
+└── hook/                # Shell integration
+```
+
+### Running Tests
+
+```bash
+# Unit tests
+cargo test
+
+# Integration tests (requires API key)
+OPENROUTER_API_KEY=your-key cargo test --test integration_test
+```
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) file for details.
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## 🆘 Support
+
+- 📖 [Documentation](https://github.com/bitrifttech/li/tree/main/documentation)
+- 🐛 [Issue Tracker](https://github.com/bitrifttech/li/issues)
+- 💬 [Discussions](https://github.com/bitrifttech/li/discussions)
+
+## 🎯 Roadmap
+
+### v1.1 (Planned)
+- [ ] Bash/Fish shell hooks
+- [ ] Better portability shims (BSD vs GNU utilities)
+- [ ] Command history and favorites
+- [ ] Custom command templates
+
+### v2.0 (Future)
+- [ ] Code generation and multi-file scaffolding
+- [ ] Windows support
+- [ ] Local model support
+- [ ] Plugin system
+
+---
+
+**Made with ❤️ by the bitrifttech team**
+
+Transform your terminal experience with AI-powered natural language command generation! 🚀
