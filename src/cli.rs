@@ -130,6 +130,10 @@ pub struct Cli {
     #[arg(short = 'i', long = "intelligence")]
     pub intelligence: bool,
 
+    /// Ask a specific question about the command output when using intelligence mode
+    #[arg(short = 'q', long = "question", requires = "intelligence")]
+    pub question: Option<String>,
+
     /// Configure li settings
     #[arg(long)]
     pub config: bool,
@@ -222,7 +226,7 @@ impl Cli {
             println!("   li --chat 'what is the capital of France?'       # Direct AI conversation");
             println!("   li --classify 'git status'                        # Classify input only");
             println!("   li -i 'df -h'                                     # Explain command output with AI");
-            println!("   li --intelligence 'ps aux'                        # Get human-friendly explanations");
+            println!("   li -i -q 'Which disk has the most space?' 'df -h'  # Ask a question about output");
             println!("   li --model                                        # Interactive model selection");
             println!("   li --model list                                   # Show available models");
             println!("   li --config --api-key YOUR_KEY                    # Set API key manually");
@@ -379,7 +383,7 @@ impl Cli {
         
         // Handle intelligence flag
         if self.intelligence {
-            handle_intelligence(self.task, &config).await?;
+            handle_intelligence(self.question.clone(), self.task, &config).await?;
             return Ok(());
         }
         
@@ -902,91 +906,137 @@ async fn handle_chat_direct(prompt: &str, config: &Config) -> Result<()> {
         }
         println!();
     }
-    
+
     Ok(())
 }
 
-async fn handle_intelligence(task: Vec<String>, config: &Config) -> Result<()> {
+async fn handle_intelligence(
+    question_flag: Option<String>,
+    task: Vec<String>,
+    config: &Config,
+) -> Result<()> {
     use std::process::Command;
-    
-    let command_str = task.join(" ").trim().to_owned();
-    
+
+    if task.is_empty() {
+        bail!("Intelligence mode requires a command to execute and explain");
+    }
+
+    // Determine question and command inputs
+    let mut question = question_flag
+        .map(|q| q.trim().to_owned())
+        .filter(|q| !q.is_empty());
+
+    let command_str = if question.is_some() || task.len() == 1 {
+        task.join(" ").trim().to_owned()
+    } else {
+        let potential_command = task.last().unwrap().trim().to_owned();
+        let potential_question = task[..task.len() - 1].join(" ").trim().to_owned();
+
+        if potential_question.is_empty() {
+            task.join(" ").trim().to_owned()
+        } else {
+            let looks_like_question = potential_question.ends_with('?')
+                || potential_question.contains('?');
+            let command_has_whitespace = potential_command.contains(char::is_whitespace);
+            let command_starts_with_flag = potential_command.starts_with('-');
+
+            if looks_like_question || command_has_whitespace {
+                question = Some(potential_question);
+                potential_command
+            } else if command_starts_with_flag {
+                task.join(" ").trim().to_owned()
+            } else {
+                task.join(" ").trim().to_owned()
+            }
+        }
+    };
+
     if command_str.is_empty() {
         bail!("Intelligence mode requires a command to execute and explain");
     }
-    
+
     println!("🧠 AI Intelligence Mode");
     println!("🔧 Executing: {}", command_str);
     println!();
-    
+
     // Execute the command and capture output
     let output = Command::new("sh")
         .arg("-c")
         .arg(&command_str)
         .output()
         .context("Failed to execute command")?;
-    
+
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    
+
     // Show the raw output
     if !stdout.trim().is_empty() {
         println!("📤 Command Output:");
         println!("{}", stdout);
     }
-    
+
     if !stderr.trim().is_empty() {
         println!("⚠️  Error Output:");
         println!("{}", stderr);
     }
-    
+
     println!();
-    
+
     // Prepare the explanation prompt
-    let explanation_prompt = format!(
-        "Please explain the following command output in a clear, human-friendly way. \
-        The command executed was: '{}'\n\n\
-        Output:\n{}\n\n\
-        Please provide:\n\
-        1. What this output means in simple terms\n\
-        2. Key insights or important information\n\
-        3. Any warnings or things to pay attention to\n\
-        4. What a user should understand from this result\n\n\
-        Keep the explanation conversational and easy to understand for someone who might not be familiar with this command.",
-        command_str,
-        if stdout.trim().is_empty() { &stderr } else { &stdout }
-    );
-    
+    let base_output = if stdout.trim().is_empty() { &stderr } else { &stdout };
+    let explanation_prompt = if let Some(question) = question {
+        format!(
+            "A user asked the following question about a command they ran:\n\
+            Question: {}\n\
+            Command: '{}'\n\
+            Output:\n{}\n\
+            Please answer the question directly, referencing the command output.\n\
+            Include any helpful context, summaries, and actionable insights the user should know.",
+            question,
+            command_str,
+            base_output
+        )
+    } else {
+        format!(
+            "Please explain the following command output in a clear, human-friendly way.\n\
+            The command executed was: '{}'\n\n\
+            Output:\n{}\n\
+            Please provide:\n\
+            1. What this output means in simple terms\n\
+            2. Key insights or important information\n\
+            3. Any warnings or things to pay attention to\n\
+            4. What a user should understand from this result\n\
+            Keep the explanation conversational and easy to understand for someone who might not be familiar with this command.",
+            command_str,
+            base_output
+        )
+    };
+
     println!("🤖 AI Explanation:");
     println!();
-    
-    // Get AI explanation
+
     let client = AIClient::new(config)?;
-    
+
     let request = ChatCompletionRequest {
         model: config.planner_model.clone(),
-        messages: vec![
-            ChatMessage {
-                role: ChatMessageRole::User,
-                content: explanation_prompt,
-            },
-        ],
+        messages: vec![ChatMessage {
+            role: ChatMessageRole::User,
+            content: explanation_prompt,
+        }],
         max_tokens: Some(config.max_tokens),
         temperature: Some(0.7),
     };
-    
+
     let response = client
         .chat_completion(request)
         .await
         .context("Failed to get AI explanation")?;
-    
-    for (i, choice) in response.choices.iter().enumerate() {
-        if i == 0 {
-            println!("{}", choice.message.content);
-        }
+
+    if let Some(choice) = response.choices.first() {
+        println!("{}", choice.message.content);
     }
-    
+
     println!();
-    
+
     Ok(())
 }

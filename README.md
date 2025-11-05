@@ -79,11 +79,12 @@ li 'find the 10 largest files in this folder'
 li --chat 'what is the capital of France?'
 li --chat 'explain quantum computing simply'
 
-# AI Intelligence Mode - explain command outputs
-li -i 'df -h'                    # Explain disk usage output
-li --intelligence 'ps aux'       # Understand running processes
-li -i 'mount'                    # Learn about mounted filesystems
-li -i 'ls -la'                   # Understand file permissions
+# AI Intelligence Mode - explain command outputs or answer questions
+li -i 'df -h'                                    # Explain disk usage output
+li --intelligence 'ps aux'                       # Understand running processes
+li -i 'mount'                                    # Learn about mounted filesystems
+li -i --question 'Which disk has most space?' "df -h"  # Ask a specific question
+li -i 'ls -la'                                   # Understand file permissions
 
 # Interactive model selection
 li --model
@@ -160,6 +161,7 @@ The **intelligence mode** (`-i` or `--intelligence`) helps you understand comman
 ```bash
 # Understand disk usage
 li -i "df -h"
+li -i --question "Which disk has most free space?" "df -h"
 
 # Learn about mounted filesystems
 li --intelligence "mount"
@@ -187,6 +189,7 @@ li -i "netstat -an | grep LISTEN"
 
 # System resources
 li --intelligence "top -l 1 | head -15"
+li --intelligence --question "Where is CPU usage spiking?" "top -l 1 | head -15"
 
 # Memory usage
 li -i "vm_stat"
