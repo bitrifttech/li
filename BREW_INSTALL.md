@@ -36,8 +36,8 @@ cargo install --git https://github.com/bitrifttech/li.git
 
 1. **Configure API Key**:
    ```bash
-   # Get your key from https://cloud.cerebras.ai/
-   li config --api-key YOUR_CEREBRAS_API_KEY
+   # Get your key from https://openrouter.ai/
+   li config --api-key YOUR_OPENROUTER_API_KEY
    ```
 
 2. **Verify Installation**:
@@ -55,8 +55,8 @@ Edit `~/.li/config.json` or use commands:
 li config
 
 # Set custom models
-li config --classifier-model llama-3.3-70b
-li config --planner-model qwen-3-235b
+li config --classifier-model nvidia/nemotron-nano-12b-v2-vl:free
+li config --planner-model minimax/minimax-m2:free
 
 # Adjust timeout and tokens
 li config --timeout 60

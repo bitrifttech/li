@@ -8,8 +8,8 @@ use std::{
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_MAX_TOKENS: u32 = 2048;
-const DEFAULT_CLASSIFIER_MODEL: &str = "meta-llama/llama-3.3-70b-instruct:free";
-const DEFAULT_PLANNER_MODEL: &str = "meta-llama/llama-3.3-70b-instruct:free";
+const DEFAULT_CLASSIFIER_MODEL: &str = "nvidia/nemotron-nano-12b-v2-vl:free";
+const DEFAULT_PLANNER_MODEL: &str = "minimax/minimax-m2:free";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
@@ -202,8 +202,7 @@ mod tests {
         std::fs::write(
             config_dir.join("config"),
             r#"{
-                "provider": "cerebras",
-                "cerebras_api_key": "file-key",
+                "openrouter_api_key": "file-key",
                 "timeout_secs": 20,
                 "max_tokens": 1024,
                 "classifier_model": "file-classifier",

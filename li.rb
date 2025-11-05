@@ -20,6 +20,6 @@ class Li < Formula
     system "#{bin}/li", "--help"
     # Test that it can handle a simple command (will fail due to missing API key, but proves it runs)
     output = shell_output("#{bin}/li 'test' 2>&1", 1)
-    assert_match(/li CLI is initialized|Cerebras API key/, output)
+    assert_match(/li CLI is initialized|OpenRouter API key/, output)
   end
 end

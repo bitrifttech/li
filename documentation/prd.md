@@ -8,7 +8,7 @@
 
 * Remove most of the need to recall exact shell commands.
 * Keep users in control: every action is previewed as a plan and only runs on approval.
-* Zero local AI requirements: use **Cerebras-hosted models**.
+* Zero local AI requirements: use **OpenRouter-hosted models**.
 
 ### Non-Goals (v1)
 
@@ -64,7 +64,7 @@ Success looks like: users trust the plan preview, approve confidently, and rarel
 
 ### 4.3 Planner
 
-* Model: **Qwen3-235B (thinking)** on Cerebras.
+* Model: **MiniMax M2** on OpenRouter.
 * Returns strict JSON (schema below).
 * Emits **safe, minimal** command steps; prefers idempotent operations and `--dry-run`/`--check` flags when available.
 * Must never run commands by itself; **li** executes only after user approval.
@@ -81,7 +81,7 @@ Success looks like: users trust the plan preview, approve confidently, and rarel
 ## 5) Non-Functional Requirements
 
 * **Safety**: Never auto-execute without explicit user action (or `--yes`).
-* **Performance**: Plan generation under 3–6s typical (depends on Cerebras latency).
+* **Performance**: Plan generation under 3–6s typical (depends on OpenRouter latency).
 * **Reliability**: Graceful timeouts and clear error messages; retry planner once on malformed JSON.
 * **Privacy**: No telemetry. No local logs unless user opts in with `LI_LOG_DIR`.
 
@@ -234,13 +234,13 @@ $ li install
 * No automatic execution by default.
 * Clear preview with exact commands to run.
 * Destructive commands require preceding checks in `dry_run_commands` when possible.
-* Network calls limited to Cerebras API; redact cwd/user path if surfaced in prompts (keep minimal context).
+* Network calls limited to OpenRouter API; redact cwd/user path if surfaced in prompts (keep minimal context).
 
 ---
 
 ## 11) Configuration
 
-* `CEREBRAS_API_KEY` (required).
+* `OPENROUTER_API_KEY` (required).
 * `LI_TIMEOUT_SECS` (default 30).
 * `LI_MAX_TOKENS` (planner output cap; default reasonable).
 * `LI_LOG_DIR` (unset by default; if set, write JSONL of plans and results locally).
@@ -309,12 +309,12 @@ src/
     mod.rs
     prompt.rs
     types.rs
-    cerebras.rs
+    client.rs
   planner/
     mod.rs
     prompt.rs
     schema.rs            # JSON schema (serde types)
-    cerebras.rs
+    client.rs
   exec/
     mod.rs               # command runner, streaming I/O
     shell.rs             # detection, env
@@ -366,7 +366,7 @@ src/
 ### v1.0 (this PRD)
 
 * Classify → Plan → Approve → Execute
-* Cerebras Qwen3-235B planner
+* OpenRouter MiniMax M2 planner
 * Optional zsh hook
 * Homebrew packaging
 

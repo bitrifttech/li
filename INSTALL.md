@@ -36,10 +36,10 @@ brew install li
 
 ## Post-Installation
 
-1. **Configure your Cerebras API key:**
+1. **Configure your OpenRouter API key:**
    ```bash
-   # Get your API key from https://cloud.cerebras.ai/
-   li config --api-key YOUR_CEREBRAS_API_KEY
+   # Get your API key from https://openrouter.ai/
+   li config --api-key YOUR_OPENROUTER_API_KEY
    ```
 
 2. **Verify installation:**
@@ -60,8 +60,8 @@ li config
 li config --api-key your-key-here
 
 # Set custom models
-li config --classifier-model llama-3.3-70b
-li config --planner-model qwen-3-235b
+li config --classifier-model nvidia/nemotron-nano-12b-v2-vl:free
+li config --planner-model minimax/minimax-m2:free
 ```
 
 ## Troubleshooting
@@ -80,7 +80,7 @@ rustup update
 ```
 
 ### API key issues
-Verify your Cerebras API key is valid and has sufficient credits.
+Verify your OpenRouter API key is valid and has sufficient credits.
 
 ## Uninstall
 

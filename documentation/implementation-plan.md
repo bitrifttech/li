@@ -4,8 +4,8 @@
 
 Based on PRD discussion and clarifications:
 
-- **Classifier Model**: llama-3.3-70b on Cerebras
-- **Planner Model**: qwen-3-235b on Cerebras  
+- **Classifier Model**: nvidia/nemotron-nano-12b-v2-vl:free on OpenRouter
+- **Planner Model**: minimax/minimax-m2:free on OpenRouter  
 - **Config Location**: `~/.li/config` (JSON format)
 - **Config Contents**: API keys, timeouts, model overrides
 - **Shell Execution**: Commands run in user's current shell with inherited env/context
@@ -14,7 +14,7 @@ Based on PRD discussion and clarifications:
 - **Testing Strategy**: Real API for integration tests, unit tests for everything else
 - **Context Scope**: Single-request only (no multi-turn memory)
 - **Output**: Stream directly to user's terminal (inherit stdio)
-- **Cerebras API Endpoint**: `https://api.cerebras.ai/v1/chat/completions`
+- **OpenRouter API Endpoint**: `https://openrouter.ai/api/v1/chat/completions`
 
 ---
 
@@ -40,7 +40,7 @@ Based on PRD discussion and clarifications:
     main.rs
     cli.rs
     config.rs
-    cerebras.rs
+    client.rs
     classifier/
       mod.rs
     planner/
@@ -66,7 +66,7 @@ cargo run -- --help
 - Define `Config` struct:
   ```rust
   pub struct Config {
-      pub cerebras_api_key: String,
+      pub api_key: String,
       pub timeout_secs: u64,
       pub max_tokens: u32,
       pub classifier_model: String,
@@ -75,7 +75,7 @@ cargo run -- --help
   ```
 - Implement `Config::load()`:
   - Try to read `~/.li/config` (JSON)
-  - Fall back to env vars: `CEREBRAS_API_KEY`, `LI_TIMEOUT_SECS`, etc.
+  - Fall back to env vars: `OPENROUTER_API_KEY`, `LI_TIMEOUT_SECS`, etc.
   - Provide defaults: timeout=30, max_tokens=2048
 - Handle missing API key gracefully (error message)
 
@@ -85,11 +85,11 @@ cargo run -- --help
 mkdir -p ~/.li
 cat > ~/.li/config << 'EOF'
 {
-  "cerebras_api_key": "test-key-123",
+  "openrouter_api_key": "sk-or-v1-test-key-123",
   "timeout_secs": 30,
   "max_tokens": 2048,
-  "classifier_model": "llama-3.3-70b",
-  "planner_model": "qwen-3-235b"
+  "classifier_model": "nvidia/nemotron-nano-12b-v2-vl:free",
+  "planner_model": "minimax/minimax-m2:free"
 }
 EOF
 
@@ -98,19 +98,19 @@ cargo run -- --help
 # Should not error about missing API key
 
 # Test env var override
-CEREBRAS_API_KEY=override-key cargo run -- --help
+OPENROUTER_API_KEY=override-key cargo run -- --help
 # Should prefer env var over file
 ```
 
 ---
 
-## Phase 2: Cerebras API Client
+## Phase 2: OpenRouter API Client
 
 ### Milestone 2.1: HTTP Client Foundation
-**Goal**: Async HTTP client that can call Cerebras API.
+**Goal**: Async HTTP client that can call OpenRouter API.
 
-**Implementation** (`src/cerebras.rs`):
-- Define `CerebrasClient` struct with API key and base URL (`https://api.cerebras.ai/v1/chat/completions`)
+**Implementation** (`src/client.rs`):
+- Define `AIClient` struct with API key and base URL (`https://openrouter.ai/api/v1/chat/completions`)
 - Implement request/response types:
   ```rust
   pub struct ChatRequest {
@@ -124,8 +124,8 @@ CEREBRAS_API_KEY=override-key cargo run -- --help
       pub choices: Vec<Choice>,
   }
   ```
-- Implement `CerebrasClient::chat_completion()` method that:
-  - Issues a POST to `https://api.cerebras.ai/v1/chat/completions`
+- Implement `AIClient::chat_completion()` method that:
+  - Issues a POST to `https://openrouter.ai/api/v1/chat/completions`
   - Sends JSON body `{ "model": ..., "messages": [...] }`
   - Includes headers `Authorization: Bearer <API KEY>` and `Content-Type: application/json`
 - Handle timeouts and network errors
@@ -133,17 +133,17 @@ CEREBRAS_API_KEY=override-key cargo run -- --help
 
 **Verification**:
 ```bash
-# Add test function in main.rs that calls Cerebras
+# Add test function in main.rs that calls OpenRouter
 cargo run -- --test-api
 # Should successfully call API and print response
-# (requires valid CEREBRAS_API_KEY)
+# (requires valid OPENROUTER_API_KEY)
 
 # Optional cURL verification using the same endpoint
-curl --location 'https://api.cerebras.ai/v1/chat/completions' \
+curl --location 'https://openrouter.ai/api/v1/chat/completions' \
   --header 'Content-Type: application/json' \
-  --header "Authorization: Bearer ${CEREBRAS_API_KEY}" \
+  --header "Authorization: Bearer ${OPENROUTER_API_KEY}" \
   --data '{
-    "model": "llama-3.3-70b",
+    "model": "nvidia/nemotron-nano-12b-v2-vl:free",
     "messages": [
       {"role": "user", "content": "Tell me a fun fact about space."}
     ]
@@ -161,9 +161,9 @@ curl --location 'https://api.cerebras.ai/v1/chat/completions' \
 **Verification**:
 ```bash
 # Unit test with mock JSON responses
-cargo test cerebras::tests::parse_valid_json
-cargo test cerebras::tests::parse_invalid_json
-cargo test cerebras::tests::retry_on_malformed
+cargo test client::tests::parse_valid_json
+cargo test client::tests::parse_invalid_json
+cargo test client::tests::retry_on_malformed
 ```
 
 ---
@@ -226,7 +226,7 @@ cargo run -- classify "show me the largest files"
 
 **Implementation**:
 - Add `--classify-only` flag
-- Call classifier via Cerebras client
+- Call classifier via OpenRouter client
 - Return appropriate exit codes:
   - Exit code 0: Natural Language
   - Exit code 100: Terminal command
@@ -241,7 +241,7 @@ cargo run -- --classify-only "create a new directory called test"
 echo $?  # Should be 0
 
 # Test with actual API
-CEREBRAS_API_KEY=your-key cargo run -- --classify-only "list files"
+OPENROUTER_API_KEY=your-key cargo run -- --classify-only "list files"
 ```
 
 ---
@@ -627,7 +627,7 @@ cargo run -- --no-color "make a git repo"
 **Verification**:
 ```bash
 # Test with invalid API key
-CEREBRAS_API_KEY=invalid cargo run -- "test"
+OPENROUTER_API_KEY=invalid cargo run -- "test"
 # Should show: "Authentication failed. Check your API key in ~/.li/config"
 
 # Test with network timeout (disconnect internet temporarily)
@@ -699,7 +699,7 @@ async fn test_classifier_nl() {
 **Verification**:
 ```bash
 # Run integration tests (requires API key)
-CEREBRAS_API_KEY=your-key cargo test --test integration_test
+OPENROUTER_API_KEY=your-key cargo test --test integration_test
 # All integration tests should pass
 ```
 

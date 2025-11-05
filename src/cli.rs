@@ -644,8 +644,8 @@ async fn handle_config(args: ConfigArgs) -> Result<()> {
             api_key: "".to_string(), // Will be set below
             timeout_secs: 30,
             max_tokens: 2048,
-            classifier_model: "meta-llama/llama-3.3-70b-instruct:free".to_string(),
-            planner_model: "meta-llama/llama-3.3-70b-instruct:free".to_string(),
+            classifier_model: "nvidia/nemotron-nano-12b-v2-vl:free".to_string(),
+            planner_model: "minimax/minimax-m2:free".to_string(),
         }
     };
     

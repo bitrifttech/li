@@ -103,14 +103,14 @@ mod tests {
             api_key: "test-key".to_string(),
             timeout_secs: 30,
             max_tokens: 2048,
-            classifier_model: "meta-llama/llama-3.3-70b-instruct:free".to_string(),
-            planner_model: "meta-llama/llama-3.3-70b-instruct:free".to_string(),
+            classifier_model: "nvidia/nemotron-nano-12b-v2-vl:free".to_string(),
+            planner_model: "minimax/minimax-m2:free".to_string(),
         }
     }
 
     fn expected_request_body(user_input: &str) -> serde_json::Value {
         json!({
-            "model": "llama-3.3-70b",
+            "model": "nvidia/nemotron-nano-12b-v2-vl:free",
             "messages": [
                 {
                     "role": "system",
