@@ -1,7 +1,10 @@
-use anyhow::Result;
-use clap::Parser;
+use anyhow::{Result, bail};
+use clap::{Args, Parser, Subcommand};
 
-/// Entry point for the `li` command-line interface (placeholder implementation).
+use crate::cerebras::{CerebrasClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
+use crate::config::Config;
+
+/// Entry point for the `li` command-line interface.
 #[derive(Debug, Parser)]
 #[command(
     name = "li",
@@ -10,19 +13,105 @@ use clap::Parser;
     long_about = None
 )]
 pub struct Cli {
-    /// Optional natural language task to route through the planner.
-    #[arg()]
-    pub task: Vec<String>,
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Directly invoke the Cerebras chat completion API.
+    Chat(ChatArgs),
+}
+
+#[derive(Debug, Args)]
+struct ChatArgs {
+    /// Optional override for the model (defaults to planner model from config).
+    #[arg(long)]
+    model: Option<String>,
+
+    /// Optional override for max_tokens (defaults to config setting).
+    #[arg(long)]
+    max_tokens: Option<u32>,
+
+    /// Optional temperature to pass through to the API.
+    #[arg(long)]
+    temperature: Option<f32>,
+
+    /// Prompt to send to the Cerebras model.
+    #[arg(required = true)]
+    prompt: Vec<String>,
 }
 
 impl Cli {
-    pub fn run(self) -> Result<()> {
-        if self.task.is_empty() {
-            println!("li CLI is initialized. Provide a task to continue.");
-        } else {
-            let request = self.task.join(" ");
-            println!("Received task: {request}");
+    pub async fn run(self, config: Config) -> Result<()> {
+        match self.command {
+            Some(Command::Chat(args)) => handle_chat(args, &config).await?,
+            None => {
+                println!(
+                    "li CLI is initialized. Provide a task or run `li chat \"your question\"` to call Cerebras."
+                );
+            }
         }
+
         Ok(())
     }
+}
+
+async fn handle_chat(args: ChatArgs, config: &Config) -> Result<()> {
+    let prompt = args.prompt.join(" ").trim().to_owned();
+    if prompt.is_empty() {
+        bail!("Prompt cannot be empty");
+    }
+
+    let model = args.model.unwrap_or_else(|| config.planner_model.clone());
+    let max_tokens = args.max_tokens.unwrap_or(config.max_tokens);
+    let temperature = args.temperature;
+
+    let client = CerebrasClient::new(config)?;
+    let response = client
+        .chat_completion(ChatCompletionRequest {
+            model: model.clone(),
+            messages: vec![ChatMessage {
+                role: ChatMessageRole::User,
+                content: prompt,
+            }],
+            max_tokens: Some(max_tokens),
+            temperature,
+        })
+        .await?;
+
+    println!("Model: {}", model);
+
+    for (idx, choice) in response.choices.iter().enumerate() {
+        println!("\nChoice {}:", idx + 1);
+        println!("{}", choice.message.content.trim());
+
+        if let Some(reasoning) = &choice.message.reasoning {
+            let trimmed = reasoning.trim();
+            if !trimmed.is_empty() {
+                println!("Reasoning: {}", trimmed);
+            }
+        }
+
+        if let Some(reason) = &choice.finish_reason {
+            println!("Finish reason: {}", reason);
+        }
+    }
+
+    if let Some(usage) = response.usage {
+        println!(
+            "\nUsage - prompt: {} tokens, completion: {} tokens, total: {} tokens",
+            format_option_u32(usage.prompt_tokens),
+            format_option_u32(usage.completion_tokens),
+            format_option_u32(usage.total_tokens)
+        );
+    }
+
+    Ok(())
+}
+
+fn format_option_u32(value: Option<u32>) -> String {
+    value
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "n/a".to_string())
 }

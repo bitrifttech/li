@@ -1,7 +1,10 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use dirs::home_dir;
 use serde::Deserialize;
-use std::{env, fs, path::{Path, PathBuf}};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_MAX_TOKENS: u32 = 2048;
@@ -241,8 +244,6 @@ mod tests {
         ]);
 
         let err = Config::load().unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Cerebras API key not found"));
+        assert!(err.to_string().contains("Cerebras API key not found"));
     }
 }

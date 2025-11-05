@@ -15,3 +15,4 @@ tokio = { version = "1.40", features = ["full"] }
 
 [dev-dependencies]
 tempfile = "3.12"
+httpmock = "0.7"
