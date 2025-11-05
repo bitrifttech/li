@@ -17,12 +17,17 @@ use crate::{classifier, planner};
     long_about = None
 )]
 pub struct Cli {
+    /// Optional subcommand (e.g., `chat`)
     #[command(subcommand)]
-    command: Option<Command>,
+    pub command: Option<Command>,
 
-    /// Plain-English task to classify (default behaviour when no subcommand is used).
-    #[arg()]
-    task: Vec<String>,
+    /// Enable classification before planning (use in shell hook mode)
+    #[arg(short = 'c', long = "classify")]
+    pub classify: bool,
+
+    /// Default task: words typed after `li`
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub task: Vec<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -54,9 +59,8 @@ impl Cli {
     pub async fn run(self, config: Config) -> Result<()> {
         match self.command {
             Some(Command::Chat(args)) => handle_chat(args, &config).await?,
-            None => handle_task(self.task, &config).await?,
+            None => handle_task(self.task, self.classify, &config).await?,
         }
-
         Ok(())
     }
 }
@@ -120,7 +124,7 @@ fn format_option_u32(value: Option<u32>) -> String {
         .unwrap_or_else(|| "n/a".to_string())
 }
 
-async fn handle_task(words: Vec<String>, config: &Config) -> Result<()> {
+async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Result<()> {
     let prompt = words.join(" ").trim().to_owned();
     if prompt.is_empty() {
         println!(
@@ -130,27 +134,32 @@ async fn handle_task(words: Vec<String>, config: &Config) -> Result<()> {
     }
 
     let client = CerebrasClient::new(config)?;
-    let classification = classifier::classify(&client, &prompt, &config.classifier_model).await?;
 
-    match classification {
-        classifier::Classification::Terminal => {
-            println!("Classification: Terminal");
-            println!("Suggested action: execute input directly in the shell.");
-            std::process::exit(100);
-        }
-        classifier::Classification::NaturalLanguage => {
-            println!("Classification: NaturalLanguage");
-            let plan =
-                planner::plan(&client, &prompt, &config.planner_model, config.max_tokens).await?;
-
-            render_plan(&plan);
-
-            if prompt_for_approval()? {
-                execute_plan(&plan).await?;
-            } else {
-                println!("\nPlan execution cancelled.");
+    // Only classify if --classify flag is set (used by shell hook)
+    if classify {
+        let classification = classifier::classify(&client, &prompt, &config.classifier_model).await?;
+        match classification {
+            classifier::Classification::Terminal => {
+                println!("Classification: Terminal");
+                println!("Suggested action: execute input directly in the shell.");
+                std::process::exit(100);
+            }
+            classifier::Classification::NaturalLanguage => {
+                println!("Classification: NaturalLanguage");
             }
         }
+    }
+
+    // Always plan (either after NL classification or directly if no classification)
+    let plan =
+        planner::plan(&client, &prompt, &config.planner_model, config.max_tokens).await?;
+
+    render_plan(&plan);
+
+    if prompt_for_approval()? {
+        execute_plan(&plan).await?;
+    } else {
+        println!("\nPlan execution cancelled.");
     }
 
     Ok(())
