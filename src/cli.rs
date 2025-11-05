@@ -122,6 +122,10 @@ pub struct Cli {
     #[arg(long = "setup")]
     pub setup: bool,
 
+    /// Direct chat with the AI model
+    #[arg(long = "chat")]
+    pub chat: bool,
+
     /// Default task: words typed after `li`
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub task: Vec<String>,
@@ -182,6 +186,15 @@ impl Cli {
         // Handle setup flag (no config required)
         if self.setup {
             return handle_setup().await;
+        }
+        
+        // Handle chat flag
+        if self.chat {
+            let prompt = self.task.join(" ").trim().to_owned();
+            if prompt.is_empty() {
+                bail!("Chat message cannot be empty. Usage: li --chat \"your message\"");
+            }
+            return handle_chat_direct(&prompt, &config).await;
         }
         
         // Handle model override
@@ -763,8 +776,44 @@ async fn handle_setup() -> Result<()> {
     println!("   Planner Model: {}", config.planner_model);
     println!("\n🎉 Setup complete! You can now use 'li' with commands like:");
     println!("   li 'list all files in current directory'");
-    println!("   li chat 'what is the capital of France?'");
+    println!("   li --chat 'what is the capital of France?'");
     println!("   li -m list  # to see available models\n");
+    
+    Ok(())
+}
+
+async fn handle_chat_direct(prompt: &str, config: &Config) -> Result<()> {
+    let client = AIClient::new(config)?;
+    
+    let request = ChatCompletionRequest {
+        model: config.planner_model.clone(),
+        messages: vec![
+            ChatMessage {
+                role: ChatMessageRole::User,
+                content: prompt.to_string(),
+            },
+        ],
+        max_tokens: Some(config.max_tokens),
+        temperature: Some(0.7),
+    };
+    
+    let response = client
+        .chat_completion(request)
+        .await
+        .context("Chat completion failed")?;
+    
+    println!("Provider: OpenRouter");
+    println!("Model: {}", config.planner_model);
+    println!();
+    
+    for (i, choice) in response.choices.iter().enumerate() {
+        println!("Choice {}:", i + 1);
+        println!("{}", choice.message.content);
+        if let Some(reason) = &choice.finish_reason {
+            println!("Finish reason: {}", reason);
+        }
+        println!();
+    }
     
     Ok(())
 }
