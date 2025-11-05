@@ -6,7 +6,7 @@ set -e
 echo "🚀 Starting li release process..."
 
 # Get version from argument or use default
-VERSION=${1:-"0.1.3"}
+VERSION=${1:-"0.1.4"}
 echo "📦 Releasing version: $VERSION"
 
 # 1. Commit and push changes to main repo (if there are changes)
