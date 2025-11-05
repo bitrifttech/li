@@ -1,5 +1,8 @@
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand};
+use std::io::{self, Write};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command as TokioCommand;
 
 use crate::cerebras::{CerebrasClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
 use crate::config::Config;
@@ -141,6 +144,12 @@ async fn handle_task(words: Vec<String>, config: &Config) -> Result<()> {
                 planner::plan(&client, &prompt, &config.planner_model, config.max_tokens).await?;
 
             render_plan(&plan);
+
+            if prompt_for_approval()? {
+                execute_plan(&plan).await?;
+            } else {
+                println!("\nPlan execution cancelled.");
+            }
         }
     }
 
@@ -168,5 +177,79 @@ fn render_plan(plan: &planner::Plan) {
         println!("\nNotes: {}", plan.notes.trim());
     }
 
-    println!("\nExecution not yet implemented. Preview only.");
+}
+
+fn prompt_for_approval() -> Result<bool> {
+    print!("\nExecute this plan? [y/N]: ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+
+    let answer = input.trim().to_lowercase();
+    Ok(answer == "y" || answer == "yes")
+}
+
+async fn execute_plan(plan: &planner::Plan) -> Result<()> {
+    println!("\n=== Executing Plan ===");
+
+    if !plan.dry_run_commands.is_empty() {
+        println!("\n[Dry-run Phase]");
+        for (idx, cmd) in plan.dry_run_commands.iter().enumerate() {
+            println!("\n> Running check {}/{}: {}", idx + 1, plan.dry_run_commands.len(), cmd);
+            let success = run_command(cmd).await?;
+            if !success {
+                bail!("Dry-run check failed: {}", cmd);
+            }
+        }
+        println!("\n✓ All dry-run checks passed.");
+    }
+
+    if !plan.execute_commands.is_empty() {
+        println!("\n[Execute Phase]");
+        for (idx, cmd) in plan.execute_commands.iter().enumerate() {
+            println!("\n> Executing {}/{}: {}", idx + 1, plan.execute_commands.len(), cmd);
+            let success = run_command(cmd).await?;
+            if !success {
+                bail!("Command failed: {}", cmd);
+            }
+        }
+        println!("\n✓ Plan execution completed.");
+    }
+
+    Ok(())
+}
+
+async fn run_command(cmd: &str) -> Result<bool> {
+    let mut child = TokioCommand::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+
+    let stdout = child.stdout.take().expect("Failed to capture stdout");
+    let stderr = child.stderr.take().expect("Failed to capture stderr");
+
+    let mut stdout_reader = BufReader::new(stdout).lines();
+    let mut stderr_reader = BufReader::new(stderr).lines();
+
+    let stdout_handle = tokio::spawn(async move {
+        while let Ok(Some(line)) = stdout_reader.next_line().await {
+            println!("{}", line);
+        }
+    });
+
+    let stderr_handle = tokio::spawn(async move {
+        while let Ok(Some(line)) = stderr_reader.next_line().await {
+            eprintln!("{}", line);
+        }
+    });
+
+    let status = child.wait().await?;
+
+    stdout_handle.await?;
+    stderr_handle.await?;
+
+    Ok(status.success())
 }

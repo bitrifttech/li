@@ -76,13 +76,18 @@ struct PlanPayload {
 }
 
 fn extract_json_object(input: &str) -> Option<String> {
-    // Strip out <think>...</think> blocks first
+    // Strip out ALL <think>...</think> blocks (there may be multiple or nested)
     let mut cleaned = input.to_string();
-    while let Some(think_start) = cleaned.find("<think>") {
-        if let Some(think_end) = cleaned.find("</think>") {
-            if think_end > think_start {
-                cleaned.replace_range(think_start..=think_end + 7, "");
+    
+    // Keep removing think blocks until none are left
+    loop {
+        if let Some(think_start) = cleaned.find("<think>") {
+            if let Some(think_end_pos) = cleaned[think_start..].find("</think>") {
+                let absolute_end = think_start + think_end_pos + "</think>".len();
+                cleaned.replace_range(think_start..absolute_end, "");
             } else {
+                // Unclosed <think> tag, remove from start to end
+                cleaned.replace_range(think_start.., "");
                 break;
             }
         } else {
@@ -90,14 +95,28 @@ fn extract_json_object(input: &str) -> Option<String> {
         }
     }
     
+    // Now find the FIRST complete JSON object only
     let trimmed = cleaned.trim();
     let start = trimmed.find('{')?;
-    let end = trimmed.rfind('}')?;
-    if end <= start {
-        return None;
+    
+    // Find the matching closing brace by counting depth
+    let mut depth = 0;
+    let mut end = None;
+    for (idx, ch) in trimmed[start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(start + idx);
+                    break;
+                }
+            }
+            _ => {}
+        }
     }
     
-    // Return the extracted JSON as a String
+    let end = end?;
     Some(trimmed[start..=end].to_string())
 }
 
