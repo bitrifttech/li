@@ -1,12 +1,99 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
+use serde::Deserialize;
 use std::io::{self, Write};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 
 use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
-use crate::config::{Config, Provider};
+use crate::config::Config;
 use crate::{classifier, planner};
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterModel {
+    id: String,
+    name: String,
+    pricing: Option<Pricing>,
+    context_length: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Pricing {
+    prompt: String,
+    completion: String,
+    request: Option<String>,
+    image: Option<String>,
+    web_search: Option<String>,
+    internal_reasoning: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterModelsResponse {
+    data: Vec<OpenRouterModel>,
+}
+
+async fn fetch_openrouter_free_models(api_key: &str) -> Result<Vec<OpenRouterModel>> {
+    use reqwest::Client;
+    
+    let client = Client::new();
+    let response = client
+        .get("https://openrouter.ai/api/v1/models")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await
+        .context("Failed to fetch models from OpenRouter")?;
+
+    if !response.status().is_success() {
+        return Err(anyhow!("OpenRouter API error: {}", response.status()));
+    }
+
+    let models_response: OpenRouterModelsResponse = response
+        .json()
+        .await
+        .context("Failed to parse OpenRouter models response")?;
+
+    // Filter for free models
+    let free_models = models_response
+        .data
+        .into_iter()
+        .filter(|model| {
+            if let Some(pricing) = &model.pricing {
+                pricing.prompt == "0" && pricing.completion == "0"
+            } else {
+                false
+            }
+        })
+        .collect();
+
+    Ok(free_models)
+}
+
+async fn select_model_interactively(models: Vec<OpenRouterModel>) -> Result<String> {
+    println!("\n🤖 Available OpenRouter Free Models:\n");
+    
+    for (idx, model) in models.iter().enumerate() {
+        let context_len = model.context_length
+            .map(|len| format!(" ({} context)", len))
+            .unwrap_or_default();
+        println!("  {}. {}{}", idx + 1, model.name, context_len);
+    }
+    
+    print!("\nSelect a model (1-{}): ", models.len());
+    io::stdout().flush()?;
+    
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    
+    let selection: usize = input.trim()
+        .parse()
+        .context("Please enter a valid number")?;
+    
+    if selection == 0 || selection > models.len() {
+        return Err(anyhow!("Please select a number between 1 and {}", models.len()));
+    }
+    
+    Ok(models[selection - 1].id.clone())
+}
 
 /// Entry point for the `li` command-line interface.
 #[derive(Debug, Parser)]
@@ -24,6 +111,10 @@ pub struct Cli {
     /// Enable classification before planning (use in shell hook mode)
     #[arg(short = 'c', long = "classify")]
     pub classify: bool,
+
+    /// Override the model (for OpenRouter, fetches free models list)
+    #[arg(short = 'm', long = "model")]
+    pub model: Option<String>,
 
     /// Default task: words typed after `li`
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -52,17 +143,13 @@ pub struct ChatArgs {
     #[arg(long)]
     temperature: Option<f32>,
 
-    /// Prompt to send to the Cerebras model.
+    /// Prompt to send to the OpenRouter model.
     #[arg(required = true)]
     prompt: Vec<String>,
 }
 
 #[derive(Debug, Args)]
 pub struct ConfigArgs {
-    /// Set the API provider (cerebras or openrouter)
-    #[arg(long)]
-    provider: Option<String>,
-
     /// Set the API key
     #[arg(long)]
     api_key: Option<String>,
@@ -85,7 +172,37 @@ pub struct ConfigArgs {
 }
 
 impl Cli {
-    pub async fn run(self, config: Config) -> Result<()> {
+    pub async fn run(self, mut config: Config) -> Result<()> {
+        // Handle model override
+        if let Some(model_arg) = self.model {
+            let models = fetch_openrouter_free_models(&config.api_key).await?;
+            if model_arg == "list" {
+                // Just list the models
+                for model in models {
+                    let context_len = model.context_length
+                        .map(|len| format!(" ({} context)", len))
+                        .unwrap_or_default();
+                    println!("{}: {}{}", model.id, model.name, context_len);
+                }
+                return Ok(());
+            } else if model_arg == "interactive" {
+                // Interactive selection
+                let selected_model = select_model_interactively(models).await?;
+                config.planner_model = selected_model.clone();
+                config.classifier_model = selected_model;
+            } else {
+                // Check if the model is in the free list
+                if !models.iter().any(|m| m.id == model_arg) {
+                    println!("Model '{}' not found in free models list.", model_arg);
+                    println!("Use 'li -m list' to see available free models.");
+                    println!("Or use 'li -m interactive' to select interactively.");
+                    return Ok(());
+                }
+                config.planner_model = model_arg.clone();
+                config.classifier_model = model_arg;
+            }
+        }
+        
         match self.command {
             Some(Command::Chat(args)) => handle_chat(args, &config).await?,
             Some(Command::Config(args)) => handle_config(args).await?,
@@ -118,7 +235,7 @@ async fn handle_chat(args: ChatArgs, config: &Config) -> Result<()> {
         })
         .await?;
 
-    println!("Provider: {}", config.provider);
+    println!("Provider: OpenRouter");
     println!("Model: {}", model);
 
     for (idx, choice) in response.choices.iter().enumerate() {
@@ -140,7 +257,7 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
     let prompt = words.join(" ").trim().to_owned();
     if prompt.is_empty() {
         println!(
-            "li CLI is initialized. Provide a task or run `li chat \"your question\"` to call Cerebras."
+            "li CLI is initialized. Provide a task or run `li chat \"your question\"` to call OpenRouter."
         );
         return Ok(());
     }
@@ -160,7 +277,7 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
                 }
             })?;
         
-        println!("Provider: {}", config.provider);
+        println!("Provider: OpenRouter");
         println!("Classifier Model: {}", config.classifier_model);
         match classification {
             classifier::Classification::Terminal => {
@@ -215,7 +332,7 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
 }
 
 fn render_plan(plan: &planner::Plan, config: &Config) {
-    println!("\nProvider: {}", config.provider);
+    println!("\nProvider: OpenRouter");
     println!("Model: {}", config.planner_model);
     println!("Plan confidence: {:.2}", plan.confidence);
 
@@ -357,19 +474,13 @@ async fn handle_config(args: ConfigArgs) -> Result<()> {
     } else {
         // Create a default config if none exists
         Config {
-            provider: Provider::Cerebras,
             api_key: "".to_string(), // Will be set below
             timeout_secs: 30,
             max_tokens: 2048,
-            classifier_model: "llama-3.3-70b".to_string(),
-            planner_model: "qwen-3-235b".to_string(),
+            classifier_model: "meta-llama/llama-3.3-70b-instruct:free".to_string(),
+            planner_model: "meta-llama/llama-3.3-70b-instruct:free".to_string(),
         }
     };
-    
-    // Update config with provided arguments
-    if let Some(provider_str) = args.provider {
-        config.provider = provider_str.parse()?;
-    }
     
     if let Some(api_key) = args.api_key {
         config.api_key = api_key;
@@ -398,11 +509,7 @@ async fn handle_config(args: ConfigArgs) -> Result<()> {
     
     // Save config
     let config_json = serde_json::json!({
-        "provider": config.provider,
-        match config.provider {
-            Provider::Cerebras => "cerebras_api_key",
-            Provider::OpenRouter => "openrouter_api_key",
-        }: config.api_key,
+        "openrouter_api_key": config.api_key,
         "timeout_secs": config.timeout_secs,
         "max_tokens": config.max_tokens,
         "classifier_model": config.classifier_model,
@@ -413,7 +520,7 @@ async fn handle_config(args: ConfigArgs) -> Result<()> {
     
     println!("✅ Configuration saved to {}", config_path.display());
     println!("📋 Current configuration:");
-    println!("   Provider: {}", config.provider);
+    println!("   Provider: OpenRouter");
     println!("   API Key: {}***", &config.api_key[..config.api_key.len().min(8)]);
     println!("   Timeout: {}s", config.timeout_secs);
     println!("   Max Tokens: {}", config.max_tokens);

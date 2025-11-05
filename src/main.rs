@@ -1,4 +1,3 @@
-mod cerebras;
 mod client;
 mod classifier;
 mod cli;

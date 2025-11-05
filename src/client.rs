@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Config, Provider};
+use crate::config::Config;
 
 #[derive(Debug, Clone)]
 pub struct AIClient {
@@ -12,22 +12,10 @@ pub struct AIClient {
     base_url: String,
     api_key: String,
     user_agent: String,
-    provider: Provider,
 }
 
 impl AIClient {
     pub fn new(config: &Config) -> Result<Self> {
-        let (base_url, api_key) = match config.provider {
-            Provider::Cerebras => (
-                "https://api.cerebras.ai".to_string(),
-                config.api_key.clone(),
-            ),
-            Provider::OpenRouter => (
-                "https://openrouter.ai/api/v1".to_string(),
-                config.api_key.clone(),
-            ),
-        };
-
         let timeout = Duration::from_secs(config.timeout_secs);
         let http = Client::builder()
             .timeout(timeout)
@@ -36,10 +24,9 @@ impl AIClient {
 
         Ok(Self {
             http,
-            base_url: base_url.trim_end_matches('/').to_string(),
-            api_key,
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+            api_key: config.api_key.clone(),
             user_agent: format!("li/{}", env!("CARGO_PKG_VERSION")),
-            provider: config.provider.clone(),
         })
     }
 
@@ -49,20 +36,15 @@ impl AIClient {
     ) -> Result<ChatCompletionResponse> {
         let url = format!("{}/chat/completions", self.base_url);
 
-        let mut req_builder = self
+        let req_builder = self
             .http
             .post(&url)
             .bearer_auth(&self.api_key)
             .header("User-Agent", &self.user_agent)
             .header("Content-Type", "application/json")
+            .header("HTTP-Referer", "https://github.com/bitrifttech/li")
+            .header("X-Title", "li CLI")
             .json(&request);
-
-        // Add OpenRouter-specific headers
-        if matches!(self.provider, Provider::OpenRouter) {
-            req_builder = req_builder
-                .header("HTTP-Referer", "https://github.com/bitrifttech/li")
-                .header("X-Title", "li CLI");
-        }
 
         let response = req_builder
             .send()
@@ -143,4 +125,3 @@ pub struct ChatChoice {
 }
 
 // Re-export for backward compatibility
-pub type CerebrasClient = AIClient;

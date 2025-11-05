@@ -228,13 +228,13 @@ async fn call_planner_with_context(
     let response = client
         .chat_completion(request)
         .await
-        .context("Cerebras planner call failed")?;
+        .context("OpenRouter planner call failed")?;
 
     let choice = response
         .choices
         .into_iter()
         .next()
-        .ok_or_else(|| anyhow!("Cerebras planner returned no choices"))?;
+        .ok_or_else(|| anyhow!("OpenRouter planner returned no choices"))?;
 
     let content = choice.message.content.trim();
     if content.is_empty() {
@@ -269,11 +269,11 @@ mod tests {
 
     fn sample_config() -> Config {
         Config {
-            cerebras_api_key: "test-key".to_string(),
+            api_key: "test-key".to_string(),
             timeout_secs: 30,
             max_tokens: 512,
-            classifier_model: "llama-3.3-70b".to_string(),
-            planner_model: "qwen-3-235b".to_string(),
+            classifier_model: "meta-llama/llama-3.3-70b-instruct:free".to_string(),
+            planner_model: "meta-llama/llama-3.3-70b-instruct:free".to_string(),
         }
     }
 
@@ -322,7 +322,7 @@ mod tests {
             .await;
 
         let config = sample_config();
-        let client = CerebrasClient::with_base_url(&config, server.base_url()).unwrap();
+        let client = AIClient::new(&config).unwrap();
 
         let plan = plan(
             &client,
@@ -375,7 +375,7 @@ mod tests {
             .await;
 
         let config = sample_config();
-        let client = CerebrasClient::with_base_url(&config, server.base_url()).unwrap();
+        let client = AIClient::new(&config).unwrap();
 
         // This should fail because interactive planning needs user input
         let result = plan(
@@ -417,7 +417,7 @@ mod tests {
             .await;
 
         let config = sample_config();
-        let client = CerebrasClient::with_base_url(&config, server.base_url()).unwrap();
+        let client = AIClient::new(&config).unwrap();
 
         let err = plan(
             &client,

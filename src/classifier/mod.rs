@@ -67,13 +67,13 @@ pub async fn classify(client: &AIClient, input: &str, model: &str) -> Result<Cla
     let response = client
         .chat_completion(request)
         .await
-        .context("Cerebras classifier call failed")?;
+        .context("OpenRouter classifier call failed")?;
 
     let choice = response
         .choices
         .into_iter()
         .next()
-        .ok_or_else(|| anyhow!("Cerebras classifier returned no choices"))?;
+        .ok_or_else(|| anyhow!("OpenRouter classifier returned no choices"))?;
 
     let content = choice.message.content.trim();
     if content.is_empty() {
@@ -100,11 +100,11 @@ mod tests {
 
     fn sample_config() -> Config {
         Config {
-            cerebras_api_key: "test-key".to_string(),
+            api_key: "test-key".to_string(),
             timeout_secs: 30,
             max_tokens: 2048,
-            classifier_model: "llama-3.3-70b".to_string(),
-            planner_model: "qwen-3-235b".to_string(),
+            classifier_model: "meta-llama/llama-3.3-70b-instruct:free".to_string(),
+            planner_model: "meta-llama/llama-3.3-70b-instruct:free".to_string(),
         }
     }
 
@@ -152,7 +152,7 @@ mod tests {
             .await;
 
         let config = sample_config();
-        let client = CerebrasClient::with_base_url(&config, server.base_url()).unwrap();
+        let client = AIClient::new(&config).unwrap();
 
         let classification = classify(&client, "git status", &config.classifier_model)
             .await
@@ -188,7 +188,7 @@ mod tests {
             .await;
 
         let config = sample_config();
-        let client = CerebrasClient::with_base_url(&config, server.base_url()).unwrap();
+        let client = AIClient::new(&config).unwrap();
 
         let classification = classify(&client, "make a new git repo", &config.classifier_model)
             .await
@@ -223,7 +223,7 @@ mod tests {
             .await;
 
         let config = sample_config();
-        let client = CerebrasClient::with_base_url(&config, server.base_url()).unwrap();
+        let client = AIClient::new(&config).unwrap();
 
         let err = classify(&client, "git status", &config.classifier_model)
             .await
