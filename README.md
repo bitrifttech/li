@@ -160,19 +160,16 @@ export LI_PLANNER_MODEL="minimax/minimax-m2:free"
 ### Configuration Commands
 
 ```bash
-# View current configuration
-li config
-
 # Set API key
-li config --api-key sk-or-v1-your-key
+li --config --api-key sk-or-v1-your-key
 
 # Set custom models
-li config --classifier-model nvidia/nemotron-nano-12b-v2-vl:free
-li config --planner-model minimax/minimax-m2:free
+li --config --classifier-model nvidia/nemotron-nano-12b-v2-vl:free
+li --config --planner-model minimax/minimax-m2:free
 
 # Adjust settings
-li config --timeout 60
-li config --max-tokens 4096
+li --config --timeout 60
+li --config --max-tokens 4096
 ```
 
 ## 🤖 AI Models

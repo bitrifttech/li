@@ -126,6 +126,30 @@ pub struct Cli {
     #[arg(long = "chat")]
     pub chat: bool,
 
+    /// Configure li settings
+    #[arg(long)]
+    pub config: bool,
+
+    /// Set the API key
+    #[arg(long)]
+    pub api_key: Option<String>,
+
+    /// Set timeout in seconds
+    #[arg(long)]
+    pub timeout: Option<u64>,
+
+    /// Set max tokens
+    #[arg(long)]
+    pub max_tokens: Option<u32>,
+
+    /// Set classifier model
+    #[arg(long)]
+    pub classifier_model: Option<String>,
+
+    /// Set planner model
+    #[arg(long)]
+    pub planner_model: Option<String>,
+
     /// Default task: words typed after `li`
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub task: Vec<String>,
@@ -135,8 +159,6 @@ pub struct Cli {
 pub enum Command {
     /// Directly invoke the chat completion API.
     Chat(ChatArgs),
-    /// Configure li settings
-    Config(ConfigArgs),
 }
 
 #[derive(Debug, Args)]
@@ -158,28 +180,6 @@ pub struct ChatArgs {
     prompt: Vec<String>,
 }
 
-#[derive(Debug, Args)]
-pub struct ConfigArgs {
-    /// Set the API key
-    #[arg(long)]
-    api_key: Option<String>,
-
-    /// Set timeout in seconds
-    #[arg(long)]
-    timeout: Option<u64>,
-
-    /// Set max tokens
-    #[arg(long)]
-    max_tokens: Option<u32>,
-
-    /// Set classifier model
-    #[arg(long)]
-    classifier_model: Option<String>,
-
-    /// Set planner model
-    #[arg(long)]
-    planner_model: Option<String>,
-}
 
 impl Cli {
     pub async fn run_setup(self) -> Result<()> {
@@ -189,7 +189,9 @@ impl Cli {
     pub async fn run(self, mut config: Config) -> Result<()> {
         // Check for empty task (show welcome message)
         let prompt = self.task.join(" ").trim().to_owned();
-        if prompt.is_empty() && !self.setup && !self.chat && self.command.is_none() && self.model.is_none() {
+        if prompt.is_empty() && !self.setup && !self.chat && !self.config && self.command.is_none() && self.model.is_none() && 
+           self.api_key.is_none() && self.timeout.is_none() && self.max_tokens.is_none() && 
+           self.classifier_model.is_none() && self.planner_model.is_none() {
             // Check if config file exists
             let config_path = Config::config_path()?;
             let config_exists = config_path.exists();
@@ -213,10 +215,14 @@ impl Cli {
             println!("   li --setup                                        # Interactive first-time setup");
             println!("   li 'list all files in current directory'           # Plan & execute commands");
             println!("   li --chat 'what is the capital of France?'       # Direct AI conversation");
+            println!("   li --classify 'git status'                        # Classify input only");
             println!("   li --model                                        # Interactive model selection");
             println!("   li --model list                                   # Show available models");
-            println!("   li config --api-key YOUR_KEY                      # Set API key manually");
-            println!("   li --classify 'git status'                        # Classify input only");
+            println!("   li --config --api-key YOUR_KEY                    # Set API key manually");
+            println!("   li --config --timeout 60                          # Set timeout in seconds");
+            println!("   li --config --max-tokens 4096                     # Set max tokens");
+            println!("   li --config --classifier-model MODEL              # Set classifier model");
+            println!("   li --config --planner-model MODEL                 # Set planner model");
             println!();
             
             if config_exists {
@@ -258,7 +264,7 @@ impl Cli {
         }
         
         // Handle model override
-        if let Some(model_arg) = self.model {
+        if let Some(ref model_arg) = self.model {
             let models = fetch_openrouter_free_models(&config.api_key).await?;
             if model_arg == "list" {
                 // Just list the models
@@ -353,20 +359,26 @@ impl Cli {
                 return Ok(());
             } else {
                 // Check if the model is in the free list
-                if !models.iter().any(|m| m.id == model_arg) {
+                if !models.iter().any(|m| m.id == *model_arg) {
                     println!("Model '{}' not found in free models list.", model_arg);
                     println!("Use 'li -m list' to see available free models.");
                     println!("Or use 'li -m' to select interactively.");
                     return Ok(());
                 }
                 config.planner_model = model_arg.clone();
-                config.classifier_model = model_arg;
+                config.classifier_model = model_arg.clone();
             }
+        }
+        
+        // Handle config flags
+        if self.config || self.api_key.is_some() || self.timeout.is_some() || self.max_tokens.is_some() || 
+           self.classifier_model.is_some() || self.planner_model.is_some() {
+            handle_config_direct(&self, &mut config).await?;
+            return Ok(());
         }
         
         match self.command {
             Some(Command::Chat(args)) => handle_chat(args, &config).await?,
-            Some(Command::Config(args)) => handle_config(args).await?,
             None => handle_task(self.task, self.classify, &config).await?,
         }
         Ok(())
@@ -633,44 +645,37 @@ async fn run_command(cmd: &str) -> Result<bool> {
     }
 }
 
-async fn handle_config(args: ConfigArgs) -> Result<()> {
+async fn handle_config_direct(args: &Cli, config: &mut Config) -> Result<()> {
     use std::fs;
     use serde_json;
     
     let config_path = Config::config_path()?;
     
-    // Load existing config or create default
-    let mut config = if config_path.exists() {
+    // Load existing config to preserve values not being updated
+    let mut existing_config = if config_path.exists() {
         Config::load()?
     } else {
-        // Create a default config if none exists
-        Config {
-            api_key: "".to_string(), // Will be set below
-            timeout_secs: 30,
-            max_tokens: 2048,
-            classifier_model: "nvidia/nemotron-nano-12b-v2-vl:free".to_string(),
-            planner_model: "minimax/minimax-m2:free".to_string(),
-        }
+        config.clone()
     };
     
-    if let Some(api_key) = args.api_key {
-        config.api_key = api_key;
+    if let Some(ref api_key) = args.api_key {
+        existing_config.api_key = api_key.clone();
     }
     
     if let Some(timeout) = args.timeout {
-        config.timeout_secs = timeout;
+        existing_config.timeout_secs = timeout;
     }
     
     if let Some(max_tokens) = args.max_tokens {
-        config.max_tokens = max_tokens;
+        existing_config.max_tokens = max_tokens;
     }
     
-    if let Some(classifier_model) = args.classifier_model {
-        config.classifier_model = classifier_model;
+    if let Some(ref classifier_model) = args.classifier_model {
+        existing_config.classifier_model = classifier_model.clone();
     }
     
-    if let Some(planner_model) = args.planner_model {
-        config.planner_model = planner_model;
+    if let Some(ref planner_model) = args.planner_model {
+        existing_config.planner_model = planner_model.clone();
     }
     
     // Create config directory if it doesn't exist
@@ -680,11 +685,11 @@ async fn handle_config(args: ConfigArgs) -> Result<()> {
     
     // Save config
     let config_json = serde_json::json!({
-        "openrouter_api_key": config.api_key,
-        "timeout_secs": config.timeout_secs,
-        "max_tokens": config.max_tokens,
-        "classifier_model": config.classifier_model,
-        "planner_model": config.planner_model,
+        "openrouter_api_key": existing_config.api_key,
+        "timeout_secs": existing_config.timeout_secs,
+        "max_tokens": existing_config.max_tokens,
+        "classifier_model": existing_config.classifier_model,
+        "planner_model": existing_config.planner_model,
     });
     
     fs::write(&config_path, serde_json::to_string_pretty(&config_json)?)?;
@@ -692,11 +697,11 @@ async fn handle_config(args: ConfigArgs) -> Result<()> {
     println!("✅ Configuration saved to {}", config_path.display());
     println!("📋 Current configuration:");
     println!("   Provider: OpenRouter");
-    println!("   API Key: {}***", &config.api_key[..config.api_key.len().min(8)]);
-    println!("   Timeout: {}s", config.timeout_secs);
-    println!("   Max Tokens: {}", config.max_tokens);
-    println!("   Classifier Model: {}", config.classifier_model);
-    println!("   Planner Model: {}", config.planner_model);
+    println!("   API Key: {}***", &existing_config.api_key[..existing_config.api_key.len().min(8)]);
+    println!("   Timeout: {}s", existing_config.timeout_secs);
+    println!("   Max Tokens: {}", existing_config.max_tokens);
+    println!("   Classifier Model: {}", existing_config.classifier_model);
+    println!("   Planner Model: {}", existing_config.planner_model);
     
     Ok(())
 }
