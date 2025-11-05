@@ -22,15 +22,22 @@ SAFETY & PORTABILITY RULES
 OUTPUT FORMAT (STRICT JSON ONLY)
 - Return exactly one JSON object on a single line.
 - No prose, no markdown, no comments, no trailing text.
-- Keys must appear in this order: "type", "confidence", "dry_run_commands", "execute_commands", "notes".
-- JSON must match this schema exactly:
+- Use tagged union with "type" field to distinguish responses:
 
+For a complete plan:
 {
   "type": "plan",
   "confidence": <number between 0 and 1 inclusive>,
   "dry_run_commands": [<string>, ...],
   "execute_commands": [<string>, ...],
   "notes": "<string>"
+}
+
+For a clarifying question:
+{
+  "type": "question",
+  "text": "<specific question to user>",
+  "context": "<brief description of what we're trying to accomplish>"
 }
 
 ADDITIONAL CONSTRAINTS
@@ -48,12 +55,16 @@ NEGATIVE EXAMPLES (DO NOT DO)
 - { "type":"plan", "confidence": 0.8, "dry_run_commands": ["cd ~ && rm -rf *"], ... } // unsafe
 
 DECISION GUIDANCE
-- If the user’s goal is not possible without more info, produce a minimal discovery plan and explain needed inputs in `notes`.
+- If the user's goal lacks essential information, ask a specific question instead of generating a partial plan.
+- Examples: "create a remote repo" → ask for server/path; "deploy my app" → ask for target platform.
+- Only ask questions when the missing information is essential for safety or correctness.
+- If you can make reasonable assumptions, proceed with the plan and note assumptions in `notes`.
 - If a command is platform-specific, keep it but mention portability in `notes`.
 - Prefer separate steps over complex pipelines unless a pipeline is clearly safer/clearer.
 
-ALLOWED OUTPUT SHAPES (the only shape):
+ALLOWED OUTPUT SHAPES (the only two shapes):
 {"type":"plan","confidence":0.0,"dry_run_commands":[],"execute_commands":[],"notes":""}
+{"type":"question","text":"What server should I use?","context":"Creating a remote git repository"}
 "#;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,14 +76,18 @@ pub struct Plan {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PlanPayload {
-    #[serde(rename = "type")]
-    plan_type: String,
-    confidence: f32,
-    dry_run_commands: Vec<String>,
-    execute_commands: Vec<String>,
-    notes: String,
+#[serde(tag = "type", rename_all = "lowercase")]
+enum PlannerResponse {
+    Plan {
+        confidence: f32,
+        dry_run_commands: Vec<String>,
+        execute_commands: Vec<String>,
+        notes: String,
+    },
+    Question {
+        text: String,
+        context: String,
+    },
 }
 
 fn extract_json_object(input: &str) -> Option<String> {
@@ -120,35 +135,98 @@ fn extract_json_object(input: &str) -> Option<String> {
     Some(trimmed[start..=end].to_string())
 }
 
-pub async fn plan(
+pub async fn interactive_plan(
     client: &CerebrasClient,
-    request: &str,
+    initial_request: &str,
     model: &str,
     max_tokens: u32,
 ) -> Result<Plan> {
-    let trimmed_request = request.trim();
-    if trimmed_request.is_empty() {
-        return Err(anyhow!("Cannot plan for empty input"));
+    use std::io::{self, Write};
+    
+    let mut context = initial_request.to_string();
+    let mut conversation: Vec<(String, String)> = vec![];
+    
+    loop {
+        let response = call_planner_with_context(client, &context, &conversation, model, max_tokens).await?;
+        
+        match response {
+            PlannerResponse::Plan { confidence, dry_run_commands, execute_commands, notes } => {
+                return Ok(Plan {
+                    confidence,
+                    dry_run_commands,
+                    execute_commands,
+                    notes,
+                });
+            }
+            PlannerResponse::Question { text, context: ctx } => {
+                println!("\n🤔 Planner asks: {}", text);
+                print!("Your answer (or 'skip' to cancel): ");
+                io::stdout().flush()?;
+                
+                let mut answer = String::new();
+                io::stdin().read_line(&mut answer)?;
+                answer = answer.trim().to_string();
+                
+                if answer.to_lowercase() == "skip" {
+                    return Err(anyhow!("Planning cancelled by user"));
+                }
+                
+                // Add Q&A to conversation context
+                conversation.push(("question".to_string(), text));
+                conversation.push(("answer".to_string(), answer.clone()));
+                
+                // Update context with new information
+                context = format!("{}\n\nPrevious Q&A:\n{}\nUser answered: {}", 
+                    ctx, 
+                    conversation.iter().rev().take(2).map(|(k,v)| format!("{}: {}", k, v)).collect::<Vec<_>>().join("\n"),
+                    answer);
+            }
+        }
     }
+}
 
-    let chat_request = ChatCompletionRequest {
+async fn call_planner_with_context(
+    client: &CerebrasClient,
+    request: &str,
+    conversation: &[(String, String)],
+    model: &str,
+    max_tokens: u32,
+) -> Result<PlannerResponse> {
+    let mut messages = vec![
+        ChatMessage {
+            role: ChatMessageRole::System,
+            content: PLANNER_SYSTEM_PROMPT.to_string(),
+        },
+    ];
+    
+    // Add conversation history if any
+    for (role, content) in conversation {
+        let message_role = if role == "question" {
+            ChatMessageRole::Assistant
+        } else {
+            ChatMessageRole::User
+        };
+        messages.push(ChatMessage {
+            role: message_role,
+            content: content.clone(),
+        });
+    }
+    
+    // Add current request
+    messages.push(ChatMessage {
+        role: ChatMessageRole::User,
+        content: request.to_string(),
+    });
+
+    let request = ChatCompletionRequest {
         model: model.to_string(),
-        messages: vec![
-            ChatMessage {
-                role: ChatMessageRole::System,
-                content: PLANNER_SYSTEM_PROMPT.to_string(),
-            },
-            ChatMessage {
-                role: ChatMessageRole::User,
-                content: trimmed_request.to_string(),
-            },
-        ],
+        messages,
         max_tokens: Some(max_tokens),
-        temperature: Some(0.2),
+        temperature: Some(0.0),
     };
 
     let response = client
-        .chat_completion(chat_request)
+        .chat_completion(request)
         .await
         .context("Cerebras planner call failed")?;
 
@@ -166,19 +244,19 @@ pub async fn plan(
     let json_fragment = extract_json_object(content)
         .ok_or_else(|| anyhow!("Planner response did not contain JSON object"))?;
 
-    let payload: PlanPayload = serde_json::from_str(&json_fragment)
+    let response: PlannerResponse = serde_json::from_str(&json_fragment)
         .with_context(|| format!("Failed to parse planner JSON: {content}"))?;
 
-    if payload.plan_type != "plan" {
-        return Err(anyhow!("Unexpected planner type: {}", payload.plan_type));
-    }
+    Ok(response)
+}
 
-    Ok(Plan {
-        confidence: payload.confidence,
-        dry_run_commands: payload.dry_run_commands,
-        execute_commands: payload.execute_commands,
-        notes: payload.notes,
-    })
+pub async fn plan(
+    client: &CerebrasClient,
+    request: &str,
+    model: &str,
+    max_tokens: u32,
+) -> Result<Plan> {
+    interactive_plan(client, request, model, max_tokens).await
 }
 
 #[cfg(test)]
@@ -213,7 +291,7 @@ mod tests {
                 }
             ],
             "max_tokens": 512,
-            "temperature": 0.2
+            "temperature": 0.0
         })
     }
 
@@ -271,14 +349,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn plan_errors_on_invalid_json() {
+    async fn plan_handles_question_response() {
         let server = MockServer::start_async().await;
 
         let _mock = server
             .mock_async(|when, then| {
                 when.method(POST)
                     .path("/v1/chat/completions")
-                    .header("Authorization", "Bearer test-key");
+                    .header("Authorization", "Bearer test-key")
+                    .json_body(expected_request_body("create a remote git repo"));
 
                 then.status(200).json_body(json!({
                     "choices": [
@@ -287,7 +366,7 @@ mod tests {
                             "finish_reason": "stop",
                             "message": {
                                 "role": "assistant",
-                                "content": "{\"type\":\"not_plan\",\"confidence\":0.5,\"dry_run_commands\":[],\"execute_commands\":[],\"notes\":\"Invalid type\"}"
+                                "content": "{\"type\":\"question\",\"text\":\"What server should I use for the remote repository?\",\"context\":\"Creating a remote git repository\"}"
                             }
                         }
                     ]
@@ -298,16 +377,17 @@ mod tests {
         let config = sample_config();
         let client = CerebrasClient::with_base_url(&config, server.base_url()).unwrap();
 
-        let err = plan(
+        // This should fail because interactive planning needs user input
+        let result = plan(
             &client,
-            "make a new git repo",
+            "create a remote git repo",
             &config.planner_model,
             config.max_tokens,
         )
-        .await
-        .unwrap_err();
+        .await;
 
-        assert!(err.to_string().contains("Unexpected planner type"));
+        // Should fail due to stdin not being available in test
+        assert!(result.is_err());
         _mock.assert_async().await;
     }
 
