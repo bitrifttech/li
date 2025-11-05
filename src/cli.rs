@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use serde::Deserialize;
+use serde_json;
 use std::fs;
 use std::io::{self, Write};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -114,7 +115,7 @@ pub struct Cli {
     pub classify: bool,
 
     /// Override the model (for OpenRouter, fetches free models list)
-    #[arg(short = 'm', long = "model")]
+    #[arg(short = 'm', long = "model", num_args = 0..=1, default_missing_value = "")]
     pub model: Option<String>,
 
     /// Interactive setup for first-time configuration
@@ -195,17 +196,94 @@ impl Cli {
                     println!("{}: {}{}", model.id, model.name, context_len);
                 }
                 return Ok(());
-            } else if model_arg == "interactive" {
-                // Interactive selection
-                let selected_model = select_model_interactively(models).await?;
-                config.planner_model = selected_model.clone();
-                config.classifier_model = selected_model;
+            } else if model_arg == "interactive" || model_arg.is_empty() {
+                // Interactive selection for both classifier and planner models
+                println!("\n🤖 Available Free Models:\n");
+                for (idx, model) in models.iter().enumerate() {
+                    let context_len = model.context_length
+                        .map(|len| format!(" ({} context)", len))
+                        .unwrap_or_default();
+                    println!("  {}. {}{}", idx + 1, model.name, context_len);
+                }
+                
+                // Get classifier model
+                let classifier_model = loop {
+                    print!("\n🧠 Select classifier model (determines if input is a command or needs planning): ");
+                    io::stdout().flush()?;
+                    
+                    let mut input = String::new();
+                    io::stdin().read_line(&mut input)?;
+                    let choice = input.trim();
+                    
+                    if choice.is_empty() {
+                        println!("❌ Please select a model number.");
+                        continue;
+                    }
+                    
+                    match choice.parse::<usize>() {
+                        Ok(num) if num >= 1 && num <= models.len() => {
+                            break models[num - 1].id.clone();
+                        }
+                        Ok(_) => println!("❌ Please enter a number between 1 and {}.", models.len()),
+                        Err(_) => println!("❌ Please enter a valid number."),
+                    }
+                };
+                
+                // Get planner model
+                let planner_model = loop {
+                    print!("\n📋 Select planner model (creates shell commands from natural language): ");
+                    io::stdout().flush()?;
+                    
+                    let mut input = String::new();
+                    io::stdin().read_line(&mut input)?;
+                    let choice = input.trim();
+                    
+                    if choice.is_empty() {
+                        println!("❌ Please select a model number.");
+                        continue;
+                    }
+                    
+                    match choice.parse::<usize>() {
+                        Ok(num) if num >= 1 && num <= models.len() => {
+                            break models[num - 1].id.clone();
+                        }
+                        Ok(_) => println!("❌ Please enter a number between 1 and {}.", models.len()),
+                        Err(_) => println!("❌ Please enter a valid number."),
+                    }
+                };
+                
+                // Update config
+                config.classifier_model = classifier_model.clone();
+                config.planner_model = planner_model.clone();
+                
+                // Save updated config
+                let config_path = Config::config_path()?;
+                if let Some(parent) = config_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                
+                let config_json = serde_json::json!({
+                    "openrouter_api_key": config.api_key,
+                    "timeout_secs": config.timeout_secs,
+                    "max_tokens": config.max_tokens,
+                    "classifier_model": config.classifier_model,
+                    "planner_model": config.planner_model,
+                });
+                
+                fs::write(&config_path, serde_json::to_string_pretty(&config_json)?)?;
+                
+                println!("\n✅ Model configuration saved to {}", config_path.display());
+                println!("📋 Updated configuration:");
+                println!("   Classifier Model: {}", config.classifier_model);
+                println!("   Planner Model: {}", config.planner_model);
+                
+                return Ok(());
             } else {
                 // Check if the model is in the free list
                 if !models.iter().any(|m| m.id == model_arg) {
                     println!("Model '{}' not found in free models list.", model_arg);
                     println!("Use 'li -m list' to see available free models.");
-                    println!("Or use 'li -m interactive' to select interactively.");
+                    println!("Or use 'li -m' to select interactively.");
                     return Ok(());
                 }
                 config.planner_model = model_arg.clone();
