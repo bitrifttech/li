@@ -230,14 +230,22 @@ async fn execute_plan(plan: &planner::Plan) -> Result<()> {
 }
 
 async fn run_command(cmd: &str) -> Result<bool> {
+    // Force ls to use colors if it's an ls command
+    let modified_cmd = if cmd.starts_with("ls ") || cmd == "ls" {
+        cmd.replace("ls", "ls --color=always")
+    } else {
+        cmd.to_string()
+    };
+    
     let mut child = TokioCommand::new("sh")
         .arg("-c")
-        .arg(cmd)
+        .arg(&modified_cmd)
         .env("FORCE_COLOR", "1")           // Generic color forcing (npm, yarn, etc.)
         .env("CLICOLOR_FORCE", "1")        // BSD/macOS color forcing
         .env("COLORTERM", "truecolor")     // Advertise true color support
         .env("TERM", "xterm-256color")     // 256 color support
         .env("GIT_CONFIG_PARAMETERS", "'color.ui=always'")  // Force git colors
+        .env("LS_COLORS", "di=1;34:fi=0:ln=1;36:pi=40;33:so=1;35:do=1;35:bd=40;33;01:cd=40;33;01:or=40;31;01:ex=1;32:*.tar=1;31:*.tgz=1;31:*.zip=1;31:*.gz=1;31:*.bz2=1;31:*.deb=1;31:*.rpm=1;31:*.jpg=1;35:*.png=1;35:*.gif=1;35:*.bmp=1;35:*.ppm=1;35:*.tga=1;35:*.xbm=1;35:*.xpm=1;35:*.tif=1;35:*.mpg=1;37:*.avi=1;37:*.gl=1;37:*.dl=1;37:*.jpg=1;35:*.png=1;35:*.gif=1;35:*.bmp=1;35:*.ppm=1;35:*.tga=1;35:*.xbm=1;35:*.xpm=1;35:*.tif=1;35:")  // Standard ls colors
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
