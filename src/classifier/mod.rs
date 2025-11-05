@@ -1,4 +1,33 @@
-use anyhow::Result;
+use anyhow::{Context, Result, anyhow};
+use serde::Deserialize;
+
+use crate::cerebras::{CerebrasClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
+
+const CLASSIFIER_SYSTEM_PROMPT: &str = r#"You are a STRICT JSON classifier for a shell assistant.
+
+TASK
+- Classify the user’s input as either natural language (NL) or a terminal command (TERMINAL).
+
+DECISION RULES
+- Output NL unless the input is an actually executable shell command as-is.
+- Examples of TERMINAL: starts with a known command or builtin (e.g., cd, ls, git, grep, cat, mkdir, rm, mv, cp, ssh, curl, wget, docker, kubectl, python, node, npm, yarn, pnpm, go, cargo, brew, tar, unzip, chmod, chown, echo, export, set, alias), or starts with ./, /, ~/, or a path plus flags; includes typical command syntax like flags (-, --), pipes (|), redirections (> >> 2>), subshells ($()), operators (&& || ;), or shebang lines.
+- If the text is a fragment like “home directory”, “make a repo”, “how do I…”, “list files”, it is NL.
+
+OUTPUT FORMAT (MUST FOLLOW EXACTLY)
+- Return a single JSON object with exactly one key "type" and a value that is exactly "NL" or "TERMINAL".
+- No other keys, no explanations, no commands, no trailing text.
+- Output must be a single line, no leading/trailing spaces.
+
+ALLOWED OUTPUTS (the only two):
+{"type":"NL"}
+{"type":"TERMINAL"}
+
+NEGATIVE EXAMPLES (DO NOT DO)
+- {"type":"NL","command":"cd ~"}
+- {"result":"NL"}
+- type: NL
+- NL
+"#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Classification {
@@ -6,7 +35,201 @@ pub enum Classification {
     NaturalLanguage,
 }
 
-pub fn classify(_input: &str) -> Result<Classification> {
-    // TODO: integrate with Cerebras llama-3.3-70b classifier
-    Ok(Classification::NaturalLanguage)
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClassificationPayload {
+    #[serde(rename = "type")]
+    classification_type: String,
+}
+
+pub async fn classify(client: &CerebrasClient, input: &str, model: &str) -> Result<Classification> {
+    let trimmed_input = input.trim();
+    if trimmed_input.is_empty() {
+        return Err(anyhow!("Cannot classify empty input"));
+    }
+
+    let request = ChatCompletionRequest {
+        model: model.to_string(),
+        messages: vec![
+            ChatMessage {
+                role: ChatMessageRole::System,
+                content: CLASSIFIER_SYSTEM_PROMPT.to_string(),
+            },
+            ChatMessage {
+                role: ChatMessageRole::User,
+                content: trimmed_input.to_string(),
+            },
+        ],
+        max_tokens: Some(16),
+        temperature: Some(0.0),
+    };
+
+    let response = client
+        .chat_completion(request)
+        .await
+        .context("Cerebras classifier call failed")?;
+
+    let choice = response
+        .choices
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("Cerebras classifier returned no choices"))?;
+
+    let content = choice.message.content.trim();
+    if content.is_empty() {
+        return Err(anyhow!("Classifier response was empty"));
+    }
+
+    let payload: ClassificationPayload = serde_json::from_str(content)
+        .with_context(|| format!("Failed to parse classifier JSON: {content}"))?;
+
+    match payload.classification_type.trim().to_uppercase().as_str() {
+        "NL" => Ok(Classification::NaturalLanguage),
+        "TERMINAL" => Ok(Classification::Terminal),
+        other => Err(anyhow!("Unexpected classifier result: {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use httpmock::prelude::*;
+    use serde_json::json;
+
+    use crate::config::Config;
+
+    fn sample_config() -> Config {
+        Config {
+            cerebras_api_key: "test-key".to_string(),
+            timeout_secs: 30,
+            max_tokens: 2048,
+            classifier_model: "llama-3.3-70b".to_string(),
+            planner_model: "qwen-3-235b".to_string(),
+        }
+    }
+
+    fn expected_request_body(user_input: &str) -> serde_json::Value {
+        json!({
+            "model": "llama-3.3-70b",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": CLASSIFIER_SYSTEM_PROMPT
+                },
+                {
+                    "role": "user",
+                    "content": user_input
+                }
+            ],
+            "max_tokens": 16,
+            "temperature": 0.0
+        })
+    }
+
+    #[tokio::test]
+    async fn classify_returns_terminal() {
+        let server = MockServer::start_async().await;
+        let _mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/chat/completions")
+                    .header("Authorization", "Bearer test-key")
+                    .json_body(expected_request_body("git status"));
+
+                then.status(200).json_body(json!({
+                    "choices": [
+                        {
+                            "index": 0,
+                            "finish_reason": "stop",
+                            "message": {
+                                "role": "assistant",
+                                "content": "{\"type\":\"TERMINAL\"}"
+                            }
+                        }
+                    ]
+                }));
+            })
+            .await;
+
+        let config = sample_config();
+        let client = CerebrasClient::with_base_url(&config, server.base_url()).unwrap();
+
+        let classification = classify(&client, "git status", &config.classifier_model)
+            .await
+            .unwrap();
+
+        assert_eq!(classification, Classification::Terminal);
+        _mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn classify_returns_natural_language() {
+        let server = MockServer::start_async().await;
+        let _mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/chat/completions")
+                    .header("Authorization", "Bearer test-key")
+                    .json_body(expected_request_body("make a new git repo"));
+
+                then.status(200).json_body(json!({
+                    "choices": [
+                        {
+                            "index": 0,
+                            "finish_reason": "stop",
+                            "message": {
+                                "role": "assistant",
+                                "content": "{\"type\":\"NL\"}"
+                            }
+                        }
+                    ]
+                }));
+            })
+            .await;
+
+        let config = sample_config();
+        let client = CerebrasClient::with_base_url(&config, server.base_url()).unwrap();
+
+        let classification = classify(&client, "make a new git repo", &config.classifier_model)
+            .await
+            .unwrap();
+
+        assert_eq!(classification, Classification::NaturalLanguage);
+        _mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn classify_errors_on_malformed_response() {
+        let server = MockServer::start_async().await;
+        let _mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/chat/completions")
+                    .header("Authorization", "Bearer test-key");
+
+                then.status(200).json_body(json!({
+                    "choices": [
+                        {
+                            "index": 0,
+                            "finish_reason": "stop",
+                            "message": {
+                                "role": "assistant",
+                                "content": "{\"unexpected\":\"value\"}"
+                            }
+                        }
+                    ]
+                }));
+            })
+            .await;
+
+        let config = sample_config();
+        let client = CerebrasClient::with_base_url(&config, server.base_url()).unwrap();
+
+        let err = classify(&client, "git status", &config.classifier_model)
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("Failed to parse classifier JSON"));
+        _mock.assert_async().await;
+    }
 }

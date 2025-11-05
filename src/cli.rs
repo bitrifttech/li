@@ -2,6 +2,7 @@ use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand};
 
 use crate::cerebras::{CerebrasClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
+use crate::classifier;
 use crate::config::Config;
 
 /// Entry point for the `li` command-line interface.
@@ -15,6 +16,10 @@ use crate::config::Config;
 pub struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
+
+    /// Plain-English task to classify (default behaviour when no subcommand is used).
+    #[arg()]
+    task: Vec<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -46,11 +51,7 @@ impl Cli {
     pub async fn run(self, config: Config) -> Result<()> {
         match self.command {
             Some(Command::Chat(args)) => handle_chat(args, &config).await?,
-            None => {
-                println!(
-                    "li CLI is initialized. Provide a task or run `li chat \"your question\"` to call Cerebras."
-                );
-            }
+            None => handle_task(self.task, &config).await?,
         }
 
         Ok(())
@@ -114,4 +115,31 @@ fn format_option_u32(value: Option<u32>) -> String {
     value
         .map(|v| v.to_string())
         .unwrap_or_else(|| "n/a".to_string())
+}
+
+async fn handle_task(words: Vec<String>, config: &Config) -> Result<()> {
+    let prompt = words.join(" ").trim().to_owned();
+    if prompt.is_empty() {
+        println!(
+            "li CLI is initialized. Provide a task or run `li chat \"your question\"` to call Cerebras."
+        );
+        return Ok(());
+    }
+
+    let client = CerebrasClient::new(config)?;
+    let classification = classifier::classify(&client, &prompt, &config.classifier_model).await?;
+
+    match classification {
+        classifier::Classification::Terminal => {
+            println!("Classification: Terminal");
+            println!("Suggested action: execute input directly in the shell.");
+            std::process::exit(100);
+        }
+        classifier::Classification::NaturalLanguage => {
+            println!("Classification: NaturalLanguage");
+            println!("Suggested action: send to planner (not yet implemented).");
+        }
+    }
+
+    Ok(())
 }
