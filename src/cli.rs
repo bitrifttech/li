@@ -183,6 +183,62 @@ pub struct ConfigArgs {
 
 impl Cli {
     pub async fn run(self, mut config: Config) -> Result<()> {
+        // Check for empty task (show welcome message)
+        let prompt = self.task.join(" ").trim().to_owned();
+        if prompt.is_empty() && !self.setup && !self.chat && self.command.is_none() && self.model.is_none() {
+            // Check if config file exists
+            let config_path = Config::config_path()?;
+            let config_exists = config_path.exists();
+            
+            println!("🚀 Welcome to li - Your AI-Powered CLI Assistant!");
+            println!();
+            println!("📖 What li does:");
+            println!("   • Converts natural language to shell commands");
+            println!("   • Classifies input as direct commands or planning tasks");
+            println!("   • Executes safe, minimal command plans");
+            println!("   • Powered by OpenRouter's free AI models");
+            println!();
+            
+            if !config_exists {
+                println!("⚠️  Configuration not found. Let's get you set up!");
+                println!("   Run: li --setup");
+                println!();
+            }
+            
+            println!("💡 How to use li:");
+            println!("   li --setup                                        # Interactive first-time setup");
+            println!("   li 'list all files in current directory'           # Plan & execute commands");
+            println!("   li --chat 'what is the capital of France?'       # Direct AI conversation");
+            println!("   li --model                                        # Interactive model selection");
+            println!("   li --model list                                   # Show available models");
+            println!("   li config --api-key YOUR_KEY                      # Set API key manually");
+            println!("   li --classify 'git status'                        # Classify input only");
+            println!();
+            
+            if config_exists {
+                // Load config just to show current settings
+                match Config::load() {
+                    Ok(loaded_config) => {
+                        println!("📋 Your current configuration:");
+                        println!("   Provider: OpenRouter");
+                        println!("   Classifier: {}", loaded_config.classifier_model);
+                        println!("   Planner: {}", loaded_config.planner_model);
+                        println!("   Timeout: {}s", loaded_config.timeout_secs);
+                        println!();
+                    }
+                    Err(_) => {
+                        println!("⚠️  Configuration exists but couldn't be loaded.");
+                        println!("   Run: li --setup");
+                        println!();
+                    }
+                }
+            }
+            
+            println!("❓ For more help: li --help");
+            
+            return Ok(());
+        }
+        
         // Handle setup flag (no config required)
         if self.setup {
             return handle_setup().await;
@@ -358,7 +414,7 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
     let prompt = words.join(" ").trim().to_owned();
     if prompt.is_empty() {
         println!(
-            "li CLI is initialized. Provide a task or run `li chat \"your question\"` to call OpenRouter."
+            "li CLI is initialized. Provide a task or run `li --chat \"your question\"` to call OpenRouter."
         );
         return Ok(());
     }
