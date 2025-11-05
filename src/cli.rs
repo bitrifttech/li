@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use clap::{Args, Parser, Subcommand};
 use std::io::{self, Write};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -31,13 +31,13 @@ pub struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
-enum Command {
+pub enum Command {
     /// Directly invoke the Cerebras chat completion API.
     Chat(ChatArgs),
 }
 
 #[derive(Debug, Args)]
-struct ChatArgs {
+pub struct ChatArgs {
     /// Optional override for the model (defaults to planner model from config).
     #[arg(long)]
     model: Option<String>,
@@ -136,24 +136,59 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
     let client = CerebrasClient::new(config)?;
 
     // Only classify if --classify flag is set (used by shell hook)
-    if classify {
-        let classification = classifier::classify(&client, &prompt, &config.classifier_model).await?;
+    let plan = if classify {
+        let classification = classifier::classify(&client, &prompt, &config.classifier_model).await
+            .map_err(|e| {
+                if e.to_string().contains("Rate limit") {
+                    anyhow!("Classification service is rate limited. Please try again in a moment.")
+                } else if e.to_string().contains("Invalid API key") {
+                    anyhow!("Invalid API key for classification. Please check your configuration.")
+                } else {
+                    e
+                }
+            })?;
+        
         match classification {
             classifier::Classification::Terminal => {
-                println!("Classification: Terminal");
-                println!("Suggested action: execute input directly in the shell.");
-                std::process::exit(100);
+                // Direct execution for terminal commands
+                println!("Executing direct terminal command: {}", prompt);
+                let success = run_command(&prompt).await?;
+                if !success {
+                    bail!("Command failed: {}", prompt);
+                }
+                return Ok(());
             }
             classifier::Classification::NaturalLanguage => {
-                println!("Classification: NaturalLanguage");
+                // Planning for natural language
+                planner::plan(&client, &prompt, &config.planner_model, config.max_tokens).await
+                    .map_err(|e| {
+                        if e.to_string().contains("Rate limit") {
+                            anyhow!("Planner service is rate limited. Please wait a moment and try again.")
+                        } else if e.to_string().contains("high traffic") {
+                            anyhow!("Planner service is experiencing high traffic. Please try again soon.")
+                        } else if e.to_string().contains("Planning cancelled") {
+                            e // Keep the cancellation message as-is
+                        } else {
+                            e
+                        }
+                    })?
             }
         }
-    }
-
-    // Always plan (either after NL classification or directly if no classification)
-    let plan =
-        planner::plan(&client, &prompt, &config.planner_model, config.max_tokens).await?;
-
+    } else {
+        // Direct planning without classification
+        planner::plan(&client, &prompt, &config.planner_model, config.max_tokens).await
+            .map_err(|e| {
+                if e.to_string().contains("Rate limit") {
+                    anyhow!("Planner service is rate limited. Please wait a moment and try again.")
+                } else if e.to_string().contains("high traffic") {
+                    anyhow!("Planner service is experiencing high traffic. Please try again soon.")
+                } else if e.to_string().contains("Planning cancelled") {
+                    e // Keep the cancellation message as-is
+                } else {
+                    e
+                }
+            })?
+    }; 
     render_plan(&plan);
 
     if prompt_for_approval()? {
@@ -248,7 +283,14 @@ async fn run_command(cmd: &str) -> Result<bool> {
         .env("LS_COLORS", "di=1;34:fi=0:ln=1;36:pi=40;33:so=1;35:do=1;35:bd=40;33;01:cd=40;33;01:or=40;31;01:ex=1;32:*.tar=1;31:*.tgz=1;31:*.zip=1;31:*.gz=1;31:*.bz2=1;31:*.deb=1;31:*.rpm=1;31:*.jpg=1;35:*.png=1;35:*.gif=1;35:*.bmp=1;35:*.ppm=1;35:*.tga=1;35:*.xbm=1;35:*.xpm=1;35:*.tif=1;35:*.mpg=1;37:*.avi=1;37:*.gl=1;37:*.dl=1;37:*.jpg=1;35:*.png=1;35:*.gif=1;35:*.bmp=1;35:*.ppm=1;35:*.tga=1;35:*.xbm=1;35:*.xpm=1;35:*.tif=1;35:")  // Standard ls colors
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .spawn()?;
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                anyhow!("Command not found: {}. Please ensure the command exists in your PATH.", cmd)
+            } else {
+                anyhow!("Failed to execute command '{}': {}", cmd, e)
+            }
+        })?;
 
     let stdout = child.stdout.take().expect("Failed to capture stdout");
     let stderr = child.stderr.take().expect("Failed to capture stderr");
@@ -268,10 +310,21 @@ async fn run_command(cmd: &str) -> Result<bool> {
         }
     });
 
-    let status = child.wait().await?;
+    let status = child.wait().await
+        .map_err(|e| anyhow!("Failed to wait for command completion: {}", e))?;
 
-    stdout_handle.await?;
-    stderr_handle.await?;
+    stdout_handle.await
+        .map_err(|e| anyhow!("Failed to read command output: {}", e))?;
+    stderr_handle.await
+        .map_err(|e| anyhow!("Failed to read command errors: {}", e))?;
 
-    Ok(status.success())
+    if !status.success() {
+        if let Some(code) = status.code() {
+            Err(anyhow!("Command failed with exit code {}: {}", code, cmd))
+        } else {
+            Err(anyhow!("Command was terminated by signal: {}", cmd))
+        }
+    } else {
+        Ok(true)
+    }
 }

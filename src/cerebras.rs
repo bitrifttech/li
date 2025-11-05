@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 
-const DEFAULT_BASE_URL: &str = "https://api.cerebras.ai";
 
 #[derive(Debug, Clone)]
 pub struct CerebrasClient {
@@ -17,17 +16,22 @@ pub struct CerebrasClient {
 }
 
 impl CerebrasClient {
+    #[allow(dead_code)] // Keep for potential future use
     pub fn new(config: &Config) -> Result<Self> {
-        Self::with_base_url(config, DEFAULT_BASE_URL)
+        Self::new_with_url(
+            config.cerebras_api_key.clone(),
+            config.timeout_secs,
+            "https://api.cerebras.ai",
+        )
     }
 
-    pub fn with_base_url(config: &Config, base_url: impl Into<String>) -> Result<Self> {
+    pub fn new_with_url(api_key: String, timeout_secs: u64, base_url: impl Into<String>) -> Result<Self> {
         let sanitized_base = base_url.into().trim_end_matches('/').to_string();
         if sanitized_base.is_empty() {
             return Err(anyhow!("Base URL cannot be empty"));
         }
 
-        let timeout = Duration::from_secs(config.timeout_secs);
+        let timeout = Duration::from_secs(timeout_secs);
         let http = Client::builder()
             .timeout(timeout)
             .build()
@@ -36,7 +40,7 @@ impl CerebrasClient {
         Ok(Self {
             http,
             base_url: sanitized_base,
-            api_key: config.cerebras_api_key.clone(),
+            api_key,
             user_agent: format!("li/{}", env!("CARGO_PKG_VERSION")),
         })
     }
@@ -57,24 +61,41 @@ impl CerebrasClient {
             .await
             .context("Failed to send request to Cerebras chat completions endpoint")?;
 
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .context("Failed to read response from Cerebras chat completions")?;
-
-        if !status.is_success() {
-            return Err(anyhow!(
-                "Cerebras API error (status {}): {}",
-                status.as_u16(),
-                body
-            ));
+        match response.status() {
+            reqwest::StatusCode::OK => {
+                response.json::<ChatCompletionResponse>().await
+                    .context("Failed to parse Cerebras chat completion response JSON")
+            }
+            reqwest::StatusCode::TOO_MANY_REQUESTS => {
+                let error_text = response.text().await.unwrap_or_default();
+                let error_msg = if error_text.contains("per second") {
+                    "Rate limit exceeded. Please wait a moment and try again."
+                } else if error_text.contains("traffic") {
+                    "Cerebras is experiencing high traffic. Please try again in a few moments."
+                } else {
+                    "Too many requests. Please wait before trying again."
+                };
+                Err(anyhow!("{} (API response: {})", error_msg, error_text))
+            }
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(anyhow!("Invalid API key. Please check your Cerebras API key configuration."))
+            }
+            reqwest::StatusCode::BAD_REQUEST => {
+                let error_text = response.text().await.unwrap_or_default();
+                Err(anyhow!("Invalid request: {}", error_text))
+            }
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR | reqwest::StatusCode::SERVICE_UNAVAILABLE => {
+                Err(anyhow!("Cerebras service is temporarily unavailable. Please try again later."))
+            }
+            status => {
+                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                Err(anyhow!(
+                    "Cerebras API error (status {}): {}",
+                    status,
+                    error_text
+                ))
+            }
         }
-
-        let parsed: ChatCompletionResponse = serde_json::from_str(&body)
-            .context("Failed to parse Cerebras chat completion response JSON")?;
-
-        Ok(parsed)
     }
 }
 
@@ -105,26 +126,24 @@ pub enum ChatMessageRole {
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionResponse {
     pub choices: Vec<ChatCompletionChoice>,
-    pub usage: Option<ChatCompletionUsage>,
+    pub usage: Option<Usage>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionChoice {
-    pub index: Option<u32>,
-    pub finish_reason: Option<String>,
     pub message: ChatCompletionMessage,
+    pub finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionMessage {
-    pub role: ChatMessageRole,
     pub content: String,
     #[serde(default)]
     pub reasoning: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ChatCompletionUsage {
+pub struct Usage {
     pub prompt_tokens: Option<u32>,
     pub completion_tokens: Option<u32>,
     pub total_tokens: Option<u32>,
