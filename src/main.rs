@@ -13,8 +13,13 @@ use clap::Parser;
 async fn main() -> Result<()> {
     let cli = cli::Cli::parse();
 
+    // Handle setup command before loading config (for fresh installs)
+    if cli.setup {
+        return cli.run_setup().await;
+    }
+
     // Check if this is just "li" with no arguments (show welcome message)
-    let is_empty_task = cli.task.is_empty() && !cli.setup && !cli.chat && cli.command.is_none() && cli.model.is_none();
+    let is_empty_task = cli.task.is_empty() && !cli.chat && cli.command.is_none() && cli.model.is_none();
     
     if is_empty_task {
         // Run with a dummy config that will trigger the welcome message
@@ -32,6 +37,7 @@ async fn main() -> Result<()> {
         Ok(cfg) => cfg,
         Err(err) => {
             eprintln!("Failed to load configuration: {err}");
+            eprintln!("Run 'li --setup' to configure li for first-time use.");
             std::process::exit(1);
         }
     };

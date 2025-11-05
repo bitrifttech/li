@@ -182,6 +182,10 @@ pub struct ConfigArgs {
 }
 
 impl Cli {
+    pub async fn run_setup(self) -> Result<()> {
+        handle_setup().await
+    }
+
     pub async fn run(self, mut config: Config) -> Result<()> {
         // Check for empty task (show welcome message)
         let prompt = self.task.join(" ").trim().to_owned();
