@@ -4,8 +4,8 @@ use std::io::{self, Write};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 
-use crate::cerebras::{CerebrasClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
-use crate::config::Config;
+use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
+use crate::config::{Config, Provider};
 use crate::{classifier, planner};
 
 /// Entry point for the `li` command-line interface.
@@ -32,8 +32,10 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Directly invoke the Cerebras chat completion API.
+    /// Directly invoke the chat completion API.
     Chat(ChatArgs),
+    /// Configure li settings
+    Config(ConfigArgs),
 }
 
 #[derive(Debug, Args)]
@@ -55,10 +57,38 @@ pub struct ChatArgs {
     prompt: Vec<String>,
 }
 
+#[derive(Debug, Args)]
+pub struct ConfigArgs {
+    /// Set the API provider (cerebras or openrouter)
+    #[arg(long)]
+    provider: Option<String>,
+
+    /// Set the API key
+    #[arg(long)]
+    api_key: Option<String>,
+
+    /// Set timeout in seconds
+    #[arg(long)]
+    timeout: Option<u64>,
+
+    /// Set max tokens
+    #[arg(long)]
+    max_tokens: Option<u32>,
+
+    /// Set classifier model
+    #[arg(long)]
+    classifier_model: Option<String>,
+
+    /// Set planner model
+    #[arg(long)]
+    planner_model: Option<String>,
+}
+
 impl Cli {
     pub async fn run(self, config: Config) -> Result<()> {
         match self.command {
             Some(Command::Chat(args)) => handle_chat(args, &config).await?,
+            Some(Command::Config(args)) => handle_config(args).await?,
             None => handle_task(self.task, self.classify, &config).await?,
         }
         Ok(())
@@ -75,7 +105,7 @@ async fn handle_chat(args: ChatArgs, config: &Config) -> Result<()> {
     let max_tokens = args.max_tokens.unwrap_or(config.max_tokens);
     let temperature = args.temperature;
 
-    let client = CerebrasClient::new(config)?;
+    let client = AIClient::new(config)?;
     let response = client
         .chat_completion(ChatCompletionRequest {
             model: model.clone(),
@@ -88,41 +118,23 @@ async fn handle_chat(args: ChatArgs, config: &Config) -> Result<()> {
         })
         .await?;
 
+    println!("Provider: {}", config.provider);
     println!("Model: {}", model);
 
     for (idx, choice) in response.choices.iter().enumerate() {
         println!("\nChoice {}:", idx + 1);
         println!("{}", choice.message.content.trim());
 
-        if let Some(reasoning) = &choice.message.reasoning {
-            let trimmed = reasoning.trim();
-            if !trimmed.is_empty() {
-                println!("Reasoning: {}", trimmed);
-            }
-        }
 
         if let Some(reason) = &choice.finish_reason {
             println!("Finish reason: {}", reason);
         }
     }
 
-    if let Some(usage) = response.usage {
-        println!(
-            "\nUsage - prompt: {} tokens, completion: {} tokens, total: {} tokens",
-            format_option_u32(usage.prompt_tokens),
-            format_option_u32(usage.completion_tokens),
-            format_option_u32(usage.total_tokens)
-        );
-    }
 
     Ok(())
 }
 
-fn format_option_u32(value: Option<u32>) -> String {
-    value
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "n/a".to_string())
-}
 
 async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Result<()> {
     let prompt = words.join(" ").trim().to_owned();
@@ -133,7 +145,7 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
         return Ok(());
     }
 
-    let client = CerebrasClient::new(config)?;
+    let client = AIClient::new(config)?;
 
     // Only classify if --classify flag is set (used by shell hook)
     let plan = if classify {
@@ -148,6 +160,8 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
                 }
             })?;
         
+        println!("Provider: {}", config.provider);
+        println!("Classifier Model: {}", config.classifier_model);
         match classification {
             classifier::Classification::Terminal => {
                 // Direct execution for terminal commands
@@ -189,7 +203,7 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
                 }
             })?
     }; 
-    render_plan(&plan);
+    render_plan(&plan, config);
 
     if prompt_for_approval()? {
         execute_plan(&plan).await?;
@@ -200,8 +214,10 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
     Ok(())
 }
 
-fn render_plan(plan: &planner::Plan) {
-    println!("\nPlan confidence: {:.2}", plan.confidence);
+fn render_plan(plan: &planner::Plan, config: &Config) {
+    println!("\nProvider: {}", config.provider);
+    println!("Model: {}", config.planner_model);
+    println!("Plan confidence: {:.2}", plan.confidence);
 
     if !plan.dry_run_commands.is_empty() {
         println!("\nDry-run Commands:");
@@ -327,4 +343,82 @@ async fn run_command(cmd: &str) -> Result<bool> {
     } else {
         Ok(true)
     }
+}
+
+async fn handle_config(args: ConfigArgs) -> Result<()> {
+    use std::fs;
+    use serde_json;
+    
+    let config_path = Config::config_path()?;
+    
+    // Load existing config or create default
+    let mut config = if config_path.exists() {
+        Config::load()?
+    } else {
+        // Create a default config if none exists
+        Config {
+            provider: Provider::Cerebras,
+            api_key: "".to_string(), // Will be set below
+            timeout_secs: 30,
+            max_tokens: 2048,
+            classifier_model: "llama-3.3-70b".to_string(),
+            planner_model: "qwen-3-235b".to_string(),
+        }
+    };
+    
+    // Update config with provided arguments
+    if let Some(provider_str) = args.provider {
+        config.provider = provider_str.parse()?;
+    }
+    
+    if let Some(api_key) = args.api_key {
+        config.api_key = api_key;
+    }
+    
+    if let Some(timeout) = args.timeout {
+        config.timeout_secs = timeout;
+    }
+    
+    if let Some(max_tokens) = args.max_tokens {
+        config.max_tokens = max_tokens;
+    }
+    
+    if let Some(classifier_model) = args.classifier_model {
+        config.classifier_model = classifier_model;
+    }
+    
+    if let Some(planner_model) = args.planner_model {
+        config.planner_model = planner_model;
+    }
+    
+    // Create config directory if it doesn't exist
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    
+    // Save config
+    let config_json = serde_json::json!({
+        "provider": config.provider,
+        match config.provider {
+            Provider::Cerebras => "cerebras_api_key",
+            Provider::OpenRouter => "openrouter_api_key",
+        }: config.api_key,
+        "timeout_secs": config.timeout_secs,
+        "max_tokens": config.max_tokens,
+        "classifier_model": config.classifier_model,
+        "planner_model": config.planner_model,
+    });
+    
+    fs::write(&config_path, serde_json::to_string_pretty(&config_json)?)?;
+    
+    println!("✅ Configuration saved to {}", config_path.display());
+    println!("📋 Current configuration:");
+    println!("   Provider: {}", config.provider);
+    println!("   API Key: {}***", &config.api_key[..config.api_key.len().min(8)]);
+    println!("   Timeout: {}s", config.timeout_secs);
+    println!("   Max Tokens: {}", config.max_tokens);
+    println!("   Classifier Model: {}", config.classifier_model);
+    println!("   Planner Model: {}", config.planner_model);
+    
+    Ok(())
 }

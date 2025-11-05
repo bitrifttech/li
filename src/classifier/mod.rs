@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
 
-use crate::cerebras::{CerebrasClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
+use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
 
 const CLASSIFIER_SYSTEM_PROMPT: &str = r#"You are a STRICT JSON classifier for a shell assistant.
 
@@ -42,7 +42,7 @@ struct ClassificationPayload {
     classification_type: String,
 }
 
-pub async fn classify(client: &CerebrasClient, input: &str, model: &str) -> Result<Classification> {
+pub async fn classify(client: &AIClient, input: &str, model: &str) -> Result<Classification> {
     let trimmed_input = input.trim();
     if trimmed_input.is_empty() {
         return Err(anyhow!("Cannot classify empty input"));

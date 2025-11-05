@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use dirs::home_dir;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -11,9 +11,44 @@ const DEFAULT_MAX_TOKENS: u32 = 2048;
 const DEFAULT_CLASSIFIER_MODEL: &str = "llama-3.3-70b";
 const DEFAULT_PLANNER_MODEL: &str = "qwen-3-235b";
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    Cerebras,
+    OpenRouter,
+}
+
+impl Default for Provider {
+    fn default() -> Self {
+        Provider::Cerebras
+    }
+}
+
+impl std::fmt::Display for Provider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Provider::Cerebras => write!(f, "cerebras"),
+            Provider::OpenRouter => write!(f, "openrouter"),
+        }
+    }
+}
+
+impl std::str::FromStr for Provider {
+    type Err = anyhow::Error;
+    
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_lowercase().as_str() {
+            "cerebras" => Ok(Provider::Cerebras),
+            "openrouter" => Ok(Provider::OpenRouter),
+            _ => Err(anyhow!("Invalid provider: {}. Supported providers: cerebras, openrouter", s)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
-    pub cerebras_api_key: String,
+    pub provider: Provider,
+    pub api_key: String,
     pub timeout_secs: u64,
     pub max_tokens: u32,
     pub classifier_model: String,
@@ -22,7 +57,9 @@ pub struct Config {
 
 #[derive(Debug, Default, Deserialize)]
 struct FileConfig {
+    provider: Option<Provider>,
     cerebras_api_key: Option<String>,
+    openrouter_api_key: Option<String>,
     timeout_secs: Option<u64>,
     max_tokens: Option<u32>,
     classifier_model: Option<String>,
@@ -40,24 +77,48 @@ impl Config {
         let path = Self::config_path()?;
         let file_cfg = Self::read_file_config(&path)?;
         let FileConfig {
-            cerebras_api_key: file_api_key,
+            provider: file_provider,
+            cerebras_api_key: file_cerebras_key,
+            openrouter_api_key: file_openrouter_key,
             timeout_secs: file_timeout,
             max_tokens: file_max_tokens,
             classifier_model: file_classifier,
             planner_model: file_planner,
         } = file_cfg;
 
-        let api_key = Self::env_string("CEREBRAS_API_KEY")?
-            .or(file_api_key)
-            .map(|s| s.trim().to_owned())
-            .filter(|s| !s.is_empty());
+        // Determine provider
+        let provider = Self::env_string("LI_PROVIDER")?
+            .and_then(|s| s.parse().ok())
+            .or(file_provider)
+            .unwrap_or_default();
 
-        let api_key = api_key.ok_or_else(|| {
-            anyhow!(
-                "Cerebras API key not found. Set CEREBRAS_API_KEY or add it to {}",
-                path.display()
-            )
-        })?;
+        // Determine API key based on provider
+        let api_key = match provider {
+            Provider::Cerebras => {
+                Self::env_string("CEREBRAS_API_KEY")?
+                    .or(file_cerebras_key)
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "Cerebras API key not found. Set CEREBRAS_API_KEY or add it to {}",
+                            path.display()
+                        )
+                    })?
+            }
+            Provider::OpenRouter => {
+                Self::env_string("OPENROUTER_API_KEY")?
+                    .or(file_openrouter_key)
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "OpenRouter API key not found. Set OPENROUTER_API_KEY or add it to {}",
+                            path.display()
+                        )
+                    })?
+            }
+        };
 
         let timeout_secs = Self::env_u64("LI_TIMEOUT_SECS")?
             .or(file_timeout)
@@ -76,7 +137,8 @@ impl Config {
             .unwrap_or_else(|| DEFAULT_PLANNER_MODEL.to_string());
 
         Ok(Self {
-            cerebras_api_key: api_key,
+            provider,
+            api_key,
             timeout_secs,
             max_tokens,
             classifier_model,
@@ -177,6 +239,7 @@ mod tests {
 
         let _env = EnvGuard::new(&[
             ("HOME", Some(home.as_str())),
+            ("LI_PROVIDER", Some("cerebras")),
             ("CEREBRAS_API_KEY", Some("env-key")),
             ("LI_TIMEOUT_SECS", Some("45")),
             ("LI_MAX_TOKENS", Some("4096")),
@@ -185,7 +248,8 @@ mod tests {
         ]);
 
         let config = Config::load().unwrap();
-        assert_eq!(config.cerebras_api_key, "env-key");
+        assert_eq!(config.provider, Provider::Cerebras);
+        assert_eq!(config.api_key, "env-key");
         assert_eq!(config.timeout_secs, 45);
         assert_eq!(config.max_tokens, 4096);
         assert_eq!(config.classifier_model, "env-classifier");
@@ -202,6 +266,7 @@ mod tests {
         std::fs::write(
             config_dir.join("config"),
             r#"{
+                "provider": "cerebras",
                 "cerebras_api_key": "file-key",
                 "timeout_secs": 20,
                 "max_tokens": 1024,
@@ -213,6 +278,7 @@ mod tests {
 
         let _env = EnvGuard::new(&[
             ("HOME", Some(home.as_str())),
+            ("LI_PROVIDER", Some("cerebras")),
             ("CEREBRAS_API_KEY", Some("env-key")),
             ("LI_TIMEOUT_SECS", Some("40")),
             ("LI_MAX_TOKENS", None),
@@ -221,7 +287,8 @@ mod tests {
         ]);
 
         let config = Config::load().unwrap();
-        assert_eq!(config.cerebras_api_key, "env-key");
+        assert_eq!(config.provider, Provider::Cerebras);
+        assert_eq!(config.api_key, "env-key");
         assert_eq!(config.timeout_secs, 40);
         assert_eq!(config.max_tokens, 1024);
         assert_eq!(config.classifier_model, "file-classifier");
@@ -236,6 +303,7 @@ mod tests {
 
         let _env = EnvGuard::new(&[
             ("HOME", Some(home.as_str())),
+            ("LI_PROVIDER", Some("cerebras")),
             ("CEREBRAS_API_KEY", None),
             ("LI_TIMEOUT_SECS", None),
             ("LI_MAX_TOKENS", None),
@@ -245,5 +313,30 @@ mod tests {
 
         let err = Config::load().unwrap_err();
         assert!(err.to_string().contains("Cerebras API key not found"));
+    }
+
+    #[test]
+    fn load_openrouter_provider() {
+        let _lock = env_lock();
+        let temp_home = TempDir::new().unwrap();
+        let home = temp_home.path().to_str().unwrap().to_string();
+
+        let _env = EnvGuard::new(&[
+            ("HOME", Some(home.as_str())),
+            ("LI_PROVIDER", Some("openrouter")),
+            ("OPENROUTER_API_KEY", Some("or-key-123")),
+            ("LI_TIMEOUT_SECS", Some("60")),
+            ("LI_MAX_TOKENS", Some("1024")),
+            ("LI_CLASSIFIER_MODEL", Some("gpt-4o-mini")),
+            ("LI_PLANNER_MODEL", Some("claude-3-haiku")),
+        ]);
+
+        let config = Config::load().unwrap();
+        assert_eq!(config.provider, Provider::OpenRouter);
+        assert_eq!(config.api_key, "or-key-123");
+        assert_eq!(config.timeout_secs, 60);
+        assert_eq!(config.max_tokens, 1024);
+        assert_eq!(config.classifier_model, "gpt-4o-mini");
+        assert_eq!(config.planner_model, "claude-3-haiku");
     }
 }

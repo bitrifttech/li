@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
 
-use crate::cerebras::{CerebrasClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
+use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
 
 const PLANNER_SYSTEM_PROMPT: &str = r#"You are a STRICT JSON planner that converts a natural-language goal into a safe, minimal shell plan.
 
@@ -136,7 +136,7 @@ fn extract_json_object(input: &str) -> Option<String> {
 }
 
 pub async fn interactive_plan(
-    client: &CerebrasClient,
+    client: &AIClient,
     initial_request: &str,
     model: &str,
     max_tokens: u32,
@@ -186,7 +186,7 @@ pub async fn interactive_plan(
 }
 
 async fn call_planner_with_context(
-    client: &CerebrasClient,
+    client: &AIClient,
     request: &str,
     conversation: &[(String, String)],
     model: &str,
@@ -251,7 +251,7 @@ async fn call_planner_with_context(
 }
 
 pub async fn plan(
-    client: &CerebrasClient,
+    client: &AIClient,
     request: &str,
     model: &str,
     max_tokens: u32,
