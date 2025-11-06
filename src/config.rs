@@ -7,7 +7,7 @@ use std::{
 };
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
-const DEFAULT_MAX_TOKENS: u32 = 2048;
+pub(crate) const DEFAULT_MAX_TOKENS: u32 = 2048;
 const DEFAULT_CLASSIFIER_MODEL: &str = "nvidia/nemotron-nano-12b-v2-vl:free";
 const DEFAULT_PLANNER_MODEL: &str = "minimax/minimax-m2:free";
 

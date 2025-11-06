@@ -8,7 +8,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 
 use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
-use crate::config::Config;
+use crate::config::{Config, DEFAULT_MAX_TOKENS};
 use crate::{classifier, planner};
 
 #[derive(Debug, Deserialize)]
@@ -297,7 +297,7 @@ impl Cli {
                 }
                 
                 // Get classifier model
-                let classifier_model = loop {
+                let classifier_index = loop {
                     print!("\n🧠 Select classifier model (determines if input is a command or needs planning): ");
                     io::stdout().flush()?;
                     
@@ -312,15 +312,16 @@ impl Cli {
                     
                     match choice.parse::<usize>() {
                         Ok(num) if num >= 1 && num <= models.len() => {
-                            break models[num - 1].id.clone();
+                            break num - 1;
                         }
                         Ok(_) => println!("❌ Please enter a number between 1 and {}.", models.len()),
                         Err(_) => println!("❌ Please enter a valid number."),
                     }
                 };
-                
+                let classifier_model = models[classifier_index].id.clone();
+
                 // Get planner model
-                let planner_model = loop {
+                let planner_index = loop {
                     print!("\n📋 Select planner model (creates shell commands from natural language): ");
                     io::stdout().flush()?;
                     
@@ -335,17 +336,24 @@ impl Cli {
                     
                     match choice.parse::<usize>() {
                         Ok(num) if num >= 1 && num <= models.len() => {
-                            break models[num - 1].id.clone();
+                            break num - 1;
                         }
                         Ok(_) => println!("❌ Please enter a number between 1 and {}.", models.len()),
                         Err(_) => println!("❌ Please enter a valid number."),
                     }
                 };
-                
+                let planner_selection = &models[planner_index];
+                let planner_model = planner_selection.id.clone();
+                let derived_max_tokens = planner_selection
+                    .context_length
+                    .map(|len| len.min(u32::MAX as usize) as u32)
+                    .unwrap_or(DEFAULT_MAX_TOKENS);
+
                 // Update config
                 config.classifier_model = classifier_model.clone();
                 config.planner_model = planner_model.clone();
-                
+                config.max_tokens = derived_max_tokens;
+
                 // Save updated config
                 let config_path = Config::config_path()?;
                 if let Some(parent) = config_path.parent() {
@@ -366,7 +374,8 @@ impl Cli {
                 println!("📋 Updated configuration:");
                 println!("   Classifier Model: {}", config.classifier_model);
                 println!("   Planner Model: {}", config.planner_model);
-                
+                println!("   Max Tokens: {}", config.max_tokens);
+
                 return Ok(());
             } else {
                 // Check if the model is in the free list
@@ -375,6 +384,13 @@ impl Cli {
                     println!("Use 'li -m list' to see available free models.");
                     println!("Or use 'li -m' to select interactively.");
                     return Ok(());
+                }
+                if let Some(selected) = models.iter().find(|m| m.id == *model_arg) {
+                    let derived_max_tokens = selected
+                        .context_length
+                        .map(|len| len.min(u32::MAX as usize) as u32)
+                        .unwrap_or(DEFAULT_MAX_TOKENS);
+                    config.max_tokens = derived_max_tokens;
                 }
                 config.planner_model = model_arg.clone();
                 config.classifier_model = model_arg.clone();
@@ -691,8 +707,26 @@ async fn handle_config_direct(args: &Cli, config: &mut Config) -> Result<()> {
         existing_config.classifier_model = classifier_model.clone();
     }
     
+    let mut planner_model_context_tokens: Option<u32> = None;
+
     if let Some(ref planner_model) = args.planner_model {
         existing_config.planner_model = planner_model.clone();
+        if args.max_tokens.is_none() {
+            if let Ok(models) = fetch_openrouter_free_models(&existing_config.api_key).await {
+                if let Some(selected) = models.into_iter().find(|m| m.id == *planner_model) {
+                    planner_model_context_tokens = Some(
+                        selected
+                            .context_length
+                            .map(|len| len.min(u32::MAX as usize) as u32)
+                            .unwrap_or(DEFAULT_MAX_TOKENS),
+                    );
+                }
+            }
+        }
+    }
+
+    if let Some(adjusted) = planner_model_context_tokens {
+        existing_config.max_tokens = adjusted;
     }
     
     // Create config directory if it doesn't exist
@@ -788,7 +822,7 @@ async fn handle_setup() -> Result<()> {
     }
     
     // Get classifier model
-    let classifier_model = loop {
+    let classifier_index = loop {
         print!("\n🧠 Select classifier model (determines if input is a command or needs planning): ");
         io::stdout().flush()?;
         
@@ -803,15 +837,16 @@ async fn handle_setup() -> Result<()> {
         
         match choice.parse::<usize>() {
             Ok(num) if num >= 1 && num <= models.len() => {
-                break models[num - 1].id.clone();
+                break num - 1;
             }
             Ok(_) => println!("❌ Please enter a number between 1 and {}.", models.len()),
             Err(_) => println!("❌ Please enter a valid number."),
         }
     };
-    
+    let classifier_model = models[classifier_index].id.clone();
+
     // Get planner model
-    let planner_model = loop {
+    let planner_index = loop {
         print!("\n📋 Select planner model (creates shell commands from natural language): ");
         io::stdout().flush()?;
         
@@ -826,18 +861,24 @@ async fn handle_setup() -> Result<()> {
         
         match choice.parse::<usize>() {
             Ok(num) if num >= 1 && num <= models.len() => {
-                break models[num - 1].id.clone();
+                break num - 1;
             }
             Ok(_) => println!("❌ Please enter a number between 1 and {}.", models.len()),
             Err(_) => println!("❌ Please enter a valid number."),
         }
     };
-    
+    let planner_selection = &models[planner_index];
+    let planner_model = planner_selection.id.clone();
+    let derived_max_tokens = planner_selection
+        .context_length
+        .map(|len| len.min(u32::MAX as usize) as u32)
+        .unwrap_or(DEFAULT_MAX_TOKENS);
+
     // Create config
     let config = Config {
         api_key,
         timeout_secs: timeout,
-        max_tokens: 100000,
+        max_tokens: derived_max_tokens,
         classifier_model: classifier_model.clone(),
         planner_model: planner_model.clone(),
     };
