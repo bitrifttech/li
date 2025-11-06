@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use dirs::home_dir;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{
     env, fs,
     path::{Path, PathBuf},

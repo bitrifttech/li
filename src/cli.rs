@@ -9,6 +9,7 @@ use tokio::process::Command as TokioCommand;
 
 use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
 use crate::config::{Config, DEFAULT_MAX_TOKENS};
+use crate::{classifier, planner};
 
 const CONTEXT_HEADROOM_TOKENS: usize = 1024;
 
@@ -531,10 +532,17 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
     }; 
     render_plan(&plan, config);
 
-    if prompt_for_approval()? {
-        execute_plan(&plan).await?;
-    } else {
-        println!("\nPlan execution cancelled.");
+    match prompt_for_approval()? {
+        ApprovalResponse::Yes => {
+            execute_plan(&plan).await?;
+        }
+        ApprovalResponse::YesWithIntelligence => {
+            let output = execute_plan_with_capture(&plan).await?;
+            explain_plan_output(&client, config, &plan, &output).await?;
+        }
+        ApprovalResponse::No => {
+            println!("\nPlan execution cancelled.");
+        }
     }
 
     Ok(())
@@ -565,15 +573,26 @@ fn render_plan(plan: &planner::Plan, config: &Config) {
 
 }
 
-fn prompt_for_approval() -> Result<bool> {
-    print!("\nExecute this plan? [y/N]: ");
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApprovalResponse {
+    Yes,
+    YesWithIntelligence,
+    No,
+}
+
+fn prompt_for_approval() -> Result<ApprovalResponse> {
+    print!("\nExecute this plan? [y/N/i]: ");
     io::stdout().flush()?;
 
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
 
     let answer = input.trim().to_lowercase();
-    Ok(answer == "y" || answer == "yes")
+    match answer.as_str() {
+        "y" | "yes" => Ok(ApprovalResponse::Yes),
+        "i" | "intelligence" => Ok(ApprovalResponse::YesWithIntelligence),
+        _ => Ok(ApprovalResponse::No),
+    }
 }
 
 async fn execute_plan(plan: &planner::Plan) -> Result<()> {
@@ -604,6 +623,107 @@ async fn execute_plan(plan: &planner::Plan) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn execute_plan_with_capture(plan: &planner::Plan) -> Result<String> {
+    use std::process::Command;
+    
+    println!("\n=== Executing Plan ===");
+    let mut all_output = String::new();
+
+    if !plan.dry_run_commands.is_empty() {
+        println!("\n[Dry-run Phase]");
+        all_output.push_str("[Dry-run Phase]\n");
+        
+        for (idx, cmd) in plan.dry_run_commands.iter().enumerate() {
+            println!("\n> Running check {}/{}: {}", idx + 1, plan.dry_run_commands.len(), cmd);
+            all_output.push_str(&format!("\nCommand: {}\n", cmd));
+            
+            let output = Command::new("sh")
+                .arg("-c")
+                .arg(cmd)
+                .output()
+                .context("Failed to execute dry-run command")?;
+            
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            
+            if !stdout.trim().is_empty() {
+                println!("\n┌─ COMMAND OUTPUT: {}", cmd);
+                println!("│");
+                for line in stdout.lines() {
+                    println!("│ {}", line);
+                }
+                println!("│");
+                all_output.push_str(&stdout);
+            }
+            
+            if !stderr.trim().is_empty() {
+                eprintln!("│");
+                for line in stderr.lines() {
+                    eprintln!("│ {}", line);
+                }
+                all_output.push_str(&stderr);
+            }
+            
+            if output.status.success() {
+                println!("└─ Command completed successfully");
+            } else {
+                println!("└─ Command failed with exit code {:?}", output.status.code());
+                bail!("Dry-run check failed: {}", cmd);
+            }
+        }
+        println!("\n✓ All dry-run checks passed.");
+        all_output.push_str("\n✓ All dry-run checks passed.\n");
+    }
+
+    if !plan.execute_commands.is_empty() {
+        println!("\n[Execute Phase]");
+        all_output.push_str("\n[Execute Phase]\n");
+        
+        for (idx, cmd) in plan.execute_commands.iter().enumerate() {
+            println!("\n> Executing {}/{}: {}", idx + 1, plan.execute_commands.len(), cmd);
+            all_output.push_str(&format!("\nCommand: {}\n", cmd));
+            
+            let output = Command::new("sh")
+                .arg("-c")
+                .arg(cmd)
+                .output()
+                .context("Failed to execute command")?;
+            
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            
+            if !stdout.trim().is_empty() {
+                println!("\n┌─ COMMAND OUTPUT: {}", cmd);
+                println!("│");
+                for line in stdout.lines() {
+                    println!("│ {}", line);
+                }
+                println!("│");
+                all_output.push_str(&stdout);
+            }
+            
+            if !stderr.trim().is_empty() {
+                eprintln!("│");
+                for line in stderr.lines() {
+                    eprintln!("│ {}", line);
+                }
+                all_output.push_str(&stderr);
+            }
+            
+            if output.status.success() {
+                println!("└─ Command completed successfully");
+            } else {
+                println!("└─ Command failed with exit code {:?}", output.status.code());
+                bail!("Command failed: {}", cmd);
+            }
+        }
+        println!("\n✓ Plan execution completed.");
+        all_output.push_str("\n✓ Plan execution completed.\n");
+    }
+
+    Ok(all_output)
 }
 
 async fn run_command(cmd: &str) -> Result<bool> {
@@ -942,6 +1062,79 @@ async fn handle_chat_direct(prompt: &str, config: &Config) -> Result<()> {
         }
         println!();
     }
+
+    Ok(())
+}
+
+async fn explain_plan_output(
+    client: &AIClient,
+    config: &Config,
+    plan: &planner::Plan,
+    output: &str,
+) -> Result<()> {
+    use crate::tokens::compute_completion_token_budget;
+    
+    println!("\n🤖 AI Intelligence Explanation:");
+    println!();
+
+    let commands_summary = {
+        let mut summary = String::new();
+        if !plan.dry_run_commands.is_empty() {
+            summary.push_str("Dry-run Commands:\n");
+            for cmd in &plan.dry_run_commands {
+                summary.push_str(&format!("  - {}\n", cmd));
+            }
+        }
+        if !plan.execute_commands.is_empty() {
+            summary.push_str("Execute Commands:\n");
+            for cmd in &plan.execute_commands {
+                summary.push_str(&format!("  - {}\n", cmd));
+            }
+        }
+        summary
+    };
+
+    let explanation_prompt = format!(
+        "Please explain the following command execution results in a clear, human-friendly way.\n\n\
+        The plan that was executed:\n{}\n\
+        Plan Notes: {}\n\n\
+        Command Output:\n{}\n\n\
+        Please provide:\n\
+        1. What this output means in simple terms\n\
+        2. Key insights or important information from the results\n\
+        3. Any warnings or things to pay attention to\n\
+        4. Whether the plan achieved its intended goal\n\
+        5. Any follow-up actions the user might need to take\n\n\
+        Keep the explanation conversational and easy to understand.",
+        commands_summary,
+        plan.notes,
+        output
+    );
+
+    let messages = vec![ChatMessage {
+        role: ChatMessageRole::User,
+        content: explanation_prompt,
+    }];
+
+    let completion_budget = compute_completion_token_budget(config.max_tokens, &messages);
+
+    let request = ChatCompletionRequest {
+        model: config.planner_model.clone(),
+        messages,
+        max_tokens: Some(completion_budget),
+        temperature: Some(0.7),
+    };
+
+    let response = client
+        .chat_completion(request)
+        .await
+        .context("Failed to get AI explanation")?;
+
+    if let Some(choice) = response.choices.first() {
+        println!("{}", choice.message.content);
+    }
+
+    println!();
 
     Ok(())
 }
