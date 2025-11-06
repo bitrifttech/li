@@ -9,7 +9,17 @@ use tokio::process::Command as TokioCommand;
 
 use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
 use crate::config::{Config, DEFAULT_MAX_TOKENS};
-use crate::{classifier, planner};
+
+const CONTEXT_HEADROOM_TOKENS: usize = 1024;
+
+fn derive_max_tokens(context_length: Option<usize>) -> u32 {
+    context_length
+        .map(|len| len.saturating_sub(CONTEXT_HEADROOM_TOKENS))
+        .filter(|&len| len > 0)
+        .map(|len| len.min(u32::MAX as usize) as u32)
+        .filter(|&tokens| tokens > 0)
+        .unwrap_or(DEFAULT_MAX_TOKENS)
+}
 
 #[derive(Debug, Deserialize)]
 struct OpenRouterModel {
@@ -344,10 +354,7 @@ impl Cli {
                 };
                 let planner_selection = &models[planner_index];
                 let planner_model = planner_selection.id.clone();
-                let derived_max_tokens = planner_selection
-                    .context_length
-                    .map(|len| len.min(u32::MAX as usize) as u32)
-                    .unwrap_or(DEFAULT_MAX_TOKENS);
+                let derived_max_tokens = derive_max_tokens(planner_selection.context_length);
 
                 // Update config
                 config.classifier_model = classifier_model.clone();
@@ -386,11 +393,7 @@ impl Cli {
                     return Ok(());
                 }
                 if let Some(selected) = models.iter().find(|m| m.id == *model_arg) {
-                    let derived_max_tokens = selected
-                        .context_length
-                        .map(|len| len.min(u32::MAX as usize) as u32)
-                        .unwrap_or(DEFAULT_MAX_TOKENS);
-                    config.max_tokens = derived_max_tokens;
+                    config.max_tokens = derive_max_tokens(selected.context_length);
                 }
                 config.planner_model = model_arg.clone();
                 config.classifier_model = model_arg.clone();
@@ -714,12 +717,7 @@ async fn handle_config_direct(args: &Cli, config: &mut Config) -> Result<()> {
         if args.max_tokens.is_none() {
             if let Ok(models) = fetch_openrouter_free_models(&existing_config.api_key).await {
                 if let Some(selected) = models.into_iter().find(|m| m.id == *planner_model) {
-                    planner_model_context_tokens = Some(
-                        selected
-                            .context_length
-                            .map(|len| len.min(u32::MAX as usize) as u32)
-                            .unwrap_or(DEFAULT_MAX_TOKENS),
-                    );
+                    planner_model_context_tokens = Some(derive_max_tokens(selected.context_length));
                 }
             }
         }
@@ -869,10 +867,7 @@ async fn handle_setup() -> Result<()> {
     };
     let planner_selection = &models[planner_index];
     let planner_model = planner_selection.id.clone();
-    let derived_max_tokens = planner_selection
-        .context_length
-        .map(|len| len.min(u32::MAX as usize) as u32)
-        .unwrap_or(DEFAULT_MAX_TOKENS);
+    let derived_max_tokens = derive_max_tokens(planner_selection.context_length);
 
     // Create config
     let config = Config {

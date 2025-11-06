@@ -2,6 +2,7 @@ mod client;
 mod classifier;
 mod cli;
 mod config;
+mod tokens;
 mod exec;
 mod hook;
 mod planner;

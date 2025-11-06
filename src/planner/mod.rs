@@ -2,6 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
 
 use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
+use crate::tokens::compute_completion_token_budget;
 
 const PLANNER_SYSTEM_PROMPT: &str = r#"You are a STRICT JSON planner that converts a natural-language goal into a safe, minimal shell plan.
 
@@ -218,10 +219,12 @@ async fn call_planner_with_context(
         content: request.to_string(),
     });
 
+    let completion_budget = compute_completion_token_budget(max_tokens, &messages);
+
     let request = ChatCompletionRequest {
         model: model.to_string(),
         messages,
-        max_tokens: Some(max_tokens),
+        max_tokens: Some(completion_budget),
         temperature: Some(0.0),
     };
 
