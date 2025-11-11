@@ -5,6 +5,7 @@ use std::io::{self, Write};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 
+use crate::agent::{AgentEvent, AgentOrchestrator, AgentOutcome, AgentRequest, AgentRun};
 use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole, LlmClient};
 use crate::config::{Config, DEFAULT_MAX_TOKENS};
 use crate::{classifier, planner};
@@ -505,97 +506,105 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
         return Ok(());
     }
 
-    let client = AIClient::new(&config.llm)?;
+    let orchestrator = AgentOrchestrator::default();
+    let mut request = AgentRequest::new(prompt.clone());
+    request.classify = classify;
 
-    // Only classify if --classify flag is set (used by shell hook)
-    let plan = if classify {
-        let classification = classifier::classify(&client, &prompt, &config.models.classifier)
-            .await
-            .map_err(|e| {
-                if e.to_string().contains("Rate limit") {
-                    anyhow!("Classification service is rate limited. Please try again in a moment.")
-                } else if e.to_string().contains("Invalid API key") {
-                    anyhow!("Invalid API key for classification. Please check your configuration.")
-                } else {
-                    e
-                }
-            })?;
-
-        println!("Provider: OpenRouter");
-        println!("Classifier Model: {}", config.models.classifier);
-        match classification {
-            classifier::Classification::Terminal => {
-                // Direct execution for terminal commands
-                println!("Executing direct terminal command: {}", prompt);
-                let success = run_command(&prompt).await?;
-                if !success {
-                    bail!("Command failed: {}", prompt);
-                }
-                return Ok(());
-            }
-            classifier::Classification::NaturalLanguage => {
-                // Planning for natural language
-                planner::plan(
-                    &client,
-                    &prompt,
-                    &config.models.planner,
-                    config.models.max_tokens,
-                )
-                .await
-                .map_err(|e| {
-                    if e.to_string().contains("Rate limit") {
-                        anyhow!(
-                            "Planner service is rate limited. Please wait a moment and try again."
-                        )
-                    } else if e.to_string().contains("high traffic") {
-                        anyhow!(
-                            "Planner service is experiencing high traffic. Please try again soon."
-                        )
-                    } else if e.to_string().contains("Planning cancelled") {
-                        e // Keep the cancellation message as-is
-                    } else {
-                        e
-                    }
-                })?
-            }
-        }
-    } else {
-        // Direct planning without classification
-        planner::plan(
-            &client,
-            &prompt,
-            &config.models.planner,
-            config.models.max_tokens,
-        )
+    let run = orchestrator
+        .run(config.clone(), request)
         .await
-        .map_err(|e| {
-            if e.to_string().contains("Rate limit") {
-                anyhow!("Planner service is rate limited. Please wait a moment and try again.")
-            } else if e.to_string().contains("high traffic") {
-                anyhow!("Planner service is experiencing high traffic. Please try again soon.")
-            } else if e.to_string().contains("Planning cancelled") {
-                e // Keep the cancellation message as-is
-            } else {
-                e
-            }
-        })?
-    };
-    render_plan(&plan, config);
+        .context("Agent pipeline failed")?;
 
-    match prompt_for_approval()? {
-        ApprovalResponse::Yes => {
-            execute_plan(&plan).await?;
-        }
-        ApprovalResponse::YesWithIntelligence => {
-            let output = execute_plan_with_capture(&plan).await?;
-            explain_plan_output(&client, config, &plan, &output).await?;
-        }
-        ApprovalResponse::No => {
-            println!("\nPlan execution cancelled.");
+    if classify {
+        if let Some(classification) = classification_from_events(&run) {
+            println!("Provider: OpenRouter");
+            println!("Classifier Model: {}", config.models.classifier);
+            println!("Classification: {}", classification_label(classification));
         }
     }
 
-    Ok(())
+    print_validation_summary(&run);
+
+    match run.outcome {
+        AgentOutcome::DirectCommand { command } => {
+            println!("Executing direct terminal command: {}", command);
+            let success = run_command(&command).await?;
+            if !success {
+                bail!("Command failed: {}", command);
+            }
+            Ok(())
+        }
+        AgentOutcome::Planned { plan, .. } => {
+            let plan = plan.ok_or_else(|| anyhow!("Agent pipeline returned no plan"))?;
+            render_plan(&plan, config);
+
+            match prompt_for_approval()? {
+                ApprovalResponse::Yes => {
+                    execute_plan(&plan).await?;
+                }
+                ApprovalResponse::YesWithIntelligence => {
+                    let output = execute_plan_with_capture(&plan).await?;
+                    let client = AIClient::new(&config.llm)?;
+                    explain_plan_output(&client, config, &plan, &output).await?;
+                }
+                ApprovalResponse::No => {
+                    println!("\nPlan execution cancelled.");
+                }
+            }
+
+            Ok(())
+        }
+        AgentOutcome::AwaitingClarification { question, context } => {
+            println!("The agent needs more information before proceeding.");
+            println!("Question: {}", question);
+            if !context.trim().is_empty() {
+                println!("Context: {}", context);
+            }
+            Ok(())
+        }
+        AgentOutcome::Cancelled { reason } => {
+            println!("Agent cancelled the request: {}", reason);
+            Ok(())
+        }
+        AgentOutcome::Failed { stage, error } => {
+            bail!("Agent stage {} failed: {}", stage, error);
+        }
+    }
+}
+
+fn classification_from_events(run: &AgentRun) -> Option<classifier::Classification> {
+    run.events.iter().find_map(|event| {
+        if let AgentEvent::ClassificationReady(result) = event {
+            Some(*result)
+        } else {
+            None
+        }
+    })
+}
+
+fn classification_label(classification: classifier::Classification) -> &'static str {
+    match classification {
+        classifier::Classification::NaturalLanguage => "natural language",
+        classifier::Classification::Terminal => "terminal command",
+    }
+}
+
+fn print_validation_summary(run: &AgentRun) {
+    if let Some(missing) = run.events.iter().find_map(|event| {
+        if let AgentEvent::ValidationFinished { missing } = event {
+            Some(*missing)
+        } else {
+            None
+        }
+    }) {
+        if missing > 0 {
+            println!(
+                "⚠️  Validator warned about {} missing command{}.",
+                missing,
+                if missing == 1 { "" } else { "s" }
+            );
+        }
+    }
 }
 
 fn render_plan(plan: &planner::Plan, config: &Config) {
