@@ -4,7 +4,10 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 
 use crate::config::{Config, LlmProvider, LlmSettings, ModelSettings, RecoverySettings};
+use crate::planner::Plan;
+use crate::validator::{MissingCommand, ValidationResult};
 
+use super::adapters::{ExecutionAdapter, PlanExecutionAdapter};
 use super::context::{AgentEvent, AgentRequest};
 use super::outcome::AgentOutcome;
 use super::stages::{AgentStage, StageOutcome};
@@ -167,4 +170,55 @@ async fn orchestrator_reports_failures() {
 fn default_orchestrator_has_standard_stages() {
     let orchestrator = AgentOrchestrator::default();
     assert_eq!(orchestrator.stage_count(), 5);
+}
+
+#[tokio::test]
+async fn plan_execution_adapter_skips_when_validation_blocks() {
+    let mut context = AgentContext::new(sample_config(), AgentRequest::new("list files"));
+    context.validation = Some(ValidationResult {
+        missing_commands: vec![MissingCommand {
+            command: "fakecmd".to_string(),
+            failed_command_line: "fakecmd --version".to_string(),
+            plan_step: 0,
+            is_dry_run: true,
+        }],
+        plan_can_continue: false,
+    });
+
+    let adapter = PlanExecutionAdapter::default();
+    let report = adapter
+        .execute(&mut context, &empty_plan())
+        .await
+        .expect("execution should succeed");
+
+    assert!(!report.success);
+    assert!(report.notes.iter().any(|note| note.contains("blocked")));
+}
+
+#[tokio::test]
+async fn plan_execution_adapter_runs_when_assumed_yes() {
+    let mut context = AgentContext::new(sample_config(), AgentRequest::new("echo hi"));
+    context.request.assume_yes = true;
+    context.validation = Some(ValidationResult {
+        missing_commands: Vec::new(),
+        plan_can_continue: true,
+    });
+
+    let adapter = PlanExecutionAdapter::default();
+    let report = adapter
+        .execute(&mut context, &empty_plan())
+        .await
+        .expect("execution should succeed");
+
+    assert!(report.success);
+    assert!(report.notes.is_empty());
+}
+
+fn empty_plan() -> Plan {
+    Plan {
+        confidence: 0.5,
+        dry_run_commands: Vec::new(),
+        execute_commands: Vec::new(),
+        notes: String::new(),
+    }
 }
