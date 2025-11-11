@@ -116,8 +116,8 @@ impl AgentPipelineBuilder {
     }
 
     pub fn with_default_adapters(self) -> Self {
-        self.with_classification_adapter(DirectClassifierAdapter)
-            .with_planning_adapter(DirectPlanningAdapter)
+        self.with_classification_adapter(DirectClassifierAdapter::default())
+            .with_planning_adapter(DirectPlanningAdapter::default())
             .with_validation_adapter(CommandValidationAdapter)
             .with_execution_adapter(NoopExecutionAdapter)
             .with_recovery_adapter(NoopRecoveryAdapter)

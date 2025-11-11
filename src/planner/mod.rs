@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
 
-use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole, LlmClient};
+use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole, DynLlmClient};
 use crate::tokens::compute_completion_token_budget;
 
 const PLANNER_SYSTEM_PROMPT: &str = r#"You are a STRICT JSON planner that converts a natural-language goal into a safe, minimal shell plan.
@@ -137,7 +137,7 @@ fn extract_json_object(input: &str) -> Option<String> {
 }
 
 pub async fn interactive_plan(
-    client: &AIClient,
+    client: &DynLlmClient,
     initial_request: &str,
     model: &str,
     max_tokens: u32,
@@ -201,7 +201,7 @@ pub async fn interactive_plan(
 }
 
 async fn call_planner_with_context(
-    client: &AIClient,
+    client: &DynLlmClient,
     request: &str,
     conversation: &[(String, String)],
     model: &str,
@@ -265,7 +265,12 @@ async fn call_planner_with_context(
     Ok(response)
 }
 
-pub async fn plan(client: &AIClient, request: &str, model: &str, max_tokens: u32) -> Result<Plan> {
+pub async fn plan(
+    client: &DynLlmClient,
+    request: &str,
+    model: &str,
+    max_tokens: u32,
+) -> Result<Plan> {
     interactive_plan(client, request, model, max_tokens).await
 }
 

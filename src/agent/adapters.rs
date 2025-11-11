@@ -1,10 +1,12 @@
 #![allow(dead_code)]
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::classifier::{self, Classification};
-use crate::client::AIClient;
+use crate::client::{LlmClientFactory, OpenRouterClientFactory};
 use crate::planner::{self, Plan};
 use crate::validator::{self, ValidationResult};
 
@@ -13,38 +15,52 @@ use super::outcome::{ExecutionReport, RecoveryOutcome};
 
 #[async_trait]
 pub trait ClassificationAdapter {
-    async fn classify(&self, context: &AgentContext) -> Result<Classification>;
+    async fn classify(&self, context: &mut AgentContext) -> Result<Classification>;
 }
 
 #[async_trait]
 pub trait PlanningAdapter {
-    async fn plan(&self, context: &AgentContext) -> Result<Plan>;
+    async fn plan(&self, context: &mut AgentContext) -> Result<Plan>;
 }
 
 #[async_trait]
 pub trait ValidationAdapter {
-    async fn validate(&self, context: &AgentContext, plan: &Plan) -> Result<ValidationResult>;
+    async fn validate(&self, context: &mut AgentContext, plan: &Plan) -> Result<ValidationResult>;
 }
 
 #[async_trait]
 pub trait ExecutionAdapter {
-    async fn execute(&self, context: &AgentContext, plan: &Plan) -> Result<ExecutionReport>;
+    async fn execute(&self, context: &mut AgentContext, plan: &Plan) -> Result<ExecutionReport>;
 }
 
 #[async_trait]
 pub trait RecoveryAdapter {
-    async fn recover(&self, context: &AgentContext) -> Result<RecoveryOutcome>;
+    async fn recover(&self, context: &mut AgentContext) -> Result<RecoveryOutcome>;
 }
 
-/// Adapter that invokes the existing classifier module with a fresh AI client.
-pub struct DirectClassifierAdapter;
+/// Adapter that invokes the existing classifier module with a shared LLM client.
+pub struct DirectClassifierAdapter {
+    factory: Arc<dyn LlmClientFactory>,
+}
+
+impl DirectClassifierAdapter {
+    pub fn new(factory: Arc<dyn LlmClientFactory>) -> Self {
+        Self { factory }
+    }
+}
+
+impl Default for DirectClassifierAdapter {
+    fn default() -> Self {
+        Self::new(Arc::new(OpenRouterClientFactory::default()))
+    }
+}
 
 #[async_trait]
 impl ClassificationAdapter for DirectClassifierAdapter {
-    async fn classify(&self, context: &AgentContext) -> Result<Classification> {
-        let client = AIClient::new(&context.config.llm)?;
+    async fn classify(&self, context: &mut AgentContext) -> Result<Classification> {
+        let client = context.llm_client(self.factory.as_ref())?;
         classifier::classify(
-            &client,
+            client.as_ref(),
             &context.request.task,
             &context.config.models.classifier,
         )
@@ -53,14 +69,28 @@ impl ClassificationAdapter for DirectClassifierAdapter {
 }
 
 /// Adapter that invokes the existing planner module.
-pub struct DirectPlanningAdapter;
+pub struct DirectPlanningAdapter {
+    factory: Arc<dyn LlmClientFactory>,
+}
+
+impl DirectPlanningAdapter {
+    pub fn new(factory: Arc<dyn LlmClientFactory>) -> Self {
+        Self { factory }
+    }
+}
+
+impl Default for DirectPlanningAdapter {
+    fn default() -> Self {
+        Self::new(Arc::new(OpenRouterClientFactory::default()))
+    }
+}
 
 #[async_trait]
 impl PlanningAdapter for DirectPlanningAdapter {
-    async fn plan(&self, context: &AgentContext) -> Result<Plan> {
-        let client = AIClient::new(&context.config.llm)?;
+    async fn plan(&self, context: &mut AgentContext) -> Result<Plan> {
+        let client = context.llm_client(self.factory.as_ref())?;
         planner::plan(
-            &client,
+            client.as_ref(),
             &context.request.task,
             &context.config.models.planner,
             context.config.models.max_tokens,
@@ -74,7 +104,7 @@ pub struct CommandValidationAdapter;
 
 #[async_trait]
 impl ValidationAdapter for CommandValidationAdapter {
-    async fn validate(&self, _context: &AgentContext, plan: &Plan) -> Result<ValidationResult> {
+    async fn validate(&self, _context: &mut AgentContext, plan: &Plan) -> Result<ValidationResult> {
         let mut validator = validator::CommandValidator::new();
         validator.validate_plan(plan).await
     }
@@ -85,7 +115,7 @@ pub struct NoopExecutionAdapter;
 
 #[async_trait]
 impl ExecutionAdapter for NoopExecutionAdapter {
-    async fn execute(&self, _context: &AgentContext, plan: &Plan) -> Result<ExecutionReport> {
+    async fn execute(&self, _context: &mut AgentContext, plan: &Plan) -> Result<ExecutionReport> {
         Ok(ExecutionReport {
             commands: plan.execute_commands.clone(),
             success: false,
@@ -101,7 +131,7 @@ pub struct NoopRecoveryAdapter;
 
 #[async_trait]
 impl RecoveryAdapter for NoopRecoveryAdapter {
-    async fn recover(&self, _context: &AgentContext) -> Result<RecoveryOutcome> {
+    async fn recover(&self, _context: &mut AgentContext) -> Result<RecoveryOutcome> {
         Ok(RecoveryOutcome::Skipped)
     }
 }

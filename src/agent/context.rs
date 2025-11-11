@@ -1,6 +1,12 @@
 #![allow(dead_code)]
 
+use std::fmt;
+use std::sync::Arc;
+
+use anyhow::Result;
+
 use crate::classifier::Classification;
+use crate::client::{DynLlmClient, LlmClientFactory};
 use crate::config::Config;
 use crate::planner::Plan;
 use crate::validator::ValidationResult;
@@ -35,7 +41,7 @@ impl AgentRequest {
 }
 
 /// Mutable context threaded through the agent stages.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AgentContext {
     pub config: Config,
     pub request: AgentRequest,
@@ -46,6 +52,22 @@ pub struct AgentContext {
     pub recovery: Option<RecoveryOutcome>,
     events: Vec<AgentEvent>,
     direct_command: Option<String>,
+    llm_client: Option<Arc<DynLlmClient>>,
+}
+
+impl fmt::Debug for AgentContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AgentContext")
+            .field("request", &self.request)
+            .field("classification", &self.classification)
+            .field("plan", &self.plan)
+            .field("validation", &self.validation)
+            .field("execution", &self.execution)
+            .field("recovery", &self.recovery)
+            .field("events", &self.events)
+            .field("direct_command", &self.direct_command)
+            .finish()
+    }
 }
 
 impl AgentContext {
@@ -60,6 +82,7 @@ impl AgentContext {
             recovery: None,
             events: Vec::new(),
             direct_command: None,
+            llm_client: None,
         }
     }
 
@@ -69,6 +92,19 @@ impl AgentContext {
 
     pub fn record_message(&mut self, message: impl Into<String>) {
         self.record_event(AgentEvent::Message(message.into()));
+    }
+
+    pub fn llm_client<F>(&mut self, factory: &F) -> Result<Arc<DynLlmClient>>
+    where
+        F: LlmClientFactory + ?Sized,
+    {
+        if let Some(client) = &self.llm_client {
+            return Ok(client.clone());
+        }
+
+        let client = factory.build(&self.config.llm)?;
+        self.llm_client = Some(client.clone());
+        Ok(client)
     }
 
     pub fn record_stage_start(&mut self, stage: StageKind) {

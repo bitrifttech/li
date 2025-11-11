@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode, header::HeaderMap};
@@ -15,6 +17,8 @@ pub trait LlmClient {
         request: ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse>;
 }
+
+pub type DynLlmClient = dyn LlmClient + Send + Sync;
 
 #[derive(Debug, Clone)]
 pub struct OpenRouterClient {
@@ -141,6 +145,19 @@ fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
 }
 
 pub type AIClient = OpenRouterClient;
+
+pub trait LlmClientFactory: Send + Sync {
+    fn build(&self, settings: &LlmSettings) -> Result<Arc<DynLlmClient>>;
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct OpenRouterClientFactory;
+
+impl LlmClientFactory for OpenRouterClientFactory {
+    fn build(&self, settings: &LlmSettings) -> Result<Arc<DynLlmClient>> {
+        Ok(Arc::new(OpenRouterClient::new(settings)?))
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatCompletionRequest {
