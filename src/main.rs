@@ -6,6 +6,7 @@ mod config;
 mod exec;
 mod hook;
 mod planner;
+mod recovery;
 mod tokens;
 mod validator;
 

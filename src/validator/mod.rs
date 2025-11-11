@@ -9,13 +9,13 @@ pub struct CommandValidator {
     cache: HashMap<String, bool>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ValidationResult {
     pub missing_commands: Vec<MissingCommand>,
     pub plan_can_continue: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MissingCommand {
     pub command: String,
     pub failed_command_line: String,

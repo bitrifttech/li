@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, anyhow};
 use colored::*;
 use serde::Deserialize;
-use std::io::{self, Write};
 use std::fmt;
+use std::io::{self, Write};
 
 use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole, LlmClient};
 use crate::config::{Config, RecoveryPreference};
@@ -94,7 +94,7 @@ impl RecoveryEngine {
                 return content[json_start..json_end].trim().to_string();
             }
         }
-        
+
         // Try to extract from any ``` code blocks
         if let Some(start) = content.find("```") {
             if let Some(end) = content[start + 3..].find("```") {
@@ -103,7 +103,7 @@ impl RecoveryEngine {
                 return content[json_start..json_end].trim().to_string();
             }
         }
-        
+
         // If no code blocks, return the content as-is (trimmed)
         content.trim().to_string()
     }
@@ -148,17 +148,15 @@ impl RecoveryEngine {
 
         match self.config.recovery.preference {
             RecoveryPreference::AlternativesFirst => {
-                self.generate_alternatives_first(missing, original_plan, original_goal).await
+                self.generate_alternatives_first(missing, original_plan, original_goal)
+                    .await
             }
             RecoveryPreference::InstallationFirst => {
-                self.generate_installation_first(missing, original_plan, original_goal).await
+                self.generate_installation_first(missing, original_plan, original_goal)
+                    .await
             }
-            RecoveryPreference::SkipOnError => {
-                Ok(RecoveryOptions::skip_only())
-            }
-            RecoveryPreference::NeverRecover => {
-                Err(anyhow!("Recovery disabled by configuration"))
-            }
+            RecoveryPreference::SkipOnError => Ok(RecoveryOptions::skip_only()),
+            RecoveryPreference::NeverRecover => Err(anyhow!("Recovery disabled by configuration")),
         }
     }
 
@@ -180,20 +178,19 @@ impl RecoveryEngine {
         original_goal: &str,
     ) -> Result<RecoveryOptions> {
         let recovery_prompt = self.build_recovery_prompt(missing, original_plan, original_goal);
-        
+
         let request = ChatCompletionRequest {
             model: self.config.models.planner.clone(),
-            messages: vec![
-                ChatMessage {
-                    role: ChatMessageRole::User,
-                    content: recovery_prompt,
-                },
-            ],
+            messages: vec![ChatMessage {
+                role: ChatMessageRole::User,
+                content: recovery_prompt,
+            }],
             max_tokens: Some(self.config.models.max_tokens),
             temperature: Some(0.3),
         };
 
-        let response = self.client
+        let response = self
+            .client
             .chat_completion(request)
             .await
             .context("Failed to get recovery suggestions from AI")?;
@@ -201,14 +198,20 @@ impl RecoveryEngine {
         if let Some(choice) = response.choices.first() {
             let json_content = Self::extract_json_from_markdown(&choice.message.content);
             let recovery_response: RecoveryResponse = serde_json::from_str(&json_content)
-                .with_context(|| format!("Failed to parse AI recovery response: {}", choice.message.content))?;
+                .with_context(|| {
+                    format!(
+                        "Failed to parse AI recovery response: {}",
+                        choice.message.content
+                    )
+                })?;
 
             let mut options = self.convert_response_to_options(recovery_response)?;
-            
+
             // For alternatives-first, ensure we have command alternatives
             if options.command_alternatives.is_empty() {
                 // Fallback: try to generate simple alternatives
-                options.command_alternatives = self.generate_fallback_alternatives(&missing.command)?;
+                options.command_alternatives =
+                    self.generate_fallback_alternatives(&missing.command)?;
             }
 
             Ok(options)
@@ -224,20 +227,19 @@ impl RecoveryEngine {
         original_goal: &str,
     ) -> Result<RecoveryOptions> {
         let install_prompt = self.build_installation_prompt(missing, original_plan, original_goal);
-        
+
         let request = ChatCompletionRequest {
             model: self.config.models.planner.clone(),
-            messages: vec![
-                ChatMessage {
-                    role: ChatMessageRole::User,
-                    content: install_prompt,
-                },
-            ],
+            messages: vec![ChatMessage {
+                role: ChatMessageRole::User,
+                content: install_prompt,
+            }],
             max_tokens: Some(self.config.models.max_tokens),
             temperature: Some(0.3),
         };
 
-        let response = self.client
+        let response = self
+            .client
             .chat_completion(request)
             .await
             .context("Failed to get installation suggestions from AI")?;
@@ -245,13 +247,19 @@ impl RecoveryEngine {
         if let Some(choice) = response.choices.first() {
             let json_content = Self::extract_json_from_markdown(&choice.message.content);
             let recovery_response: RecoveryResponse = serde_json::from_str(&json_content)
-                .with_context(|| format!("Failed to parse AI installation response: {}", choice.message.content))?;
+                .with_context(|| {
+                    format!(
+                        "Failed to parse AI installation response: {}",
+                        choice.message.content
+                    )
+                })?;
 
             let mut options = self.convert_response_to_options(recovery_response)?;
-            
+
             // For installation-first, prioritize installation instructions
             if options.installation_instructions.is_empty() {
-                options.installation_instructions = self.generate_fallback_instructions(&missing.command)?;
+                options.installation_instructions =
+                    self.generate_fallback_instructions(&missing.command)?;
             }
 
             Ok(options)
@@ -361,7 +369,8 @@ Respond in valid JSON format:
     }
 
     fn convert_response_to_options(&self, response: RecoveryResponse) -> Result<RecoveryOptions> {
-        let command_alternatives: Vec<CommandAlternative> = response.alternatives
+        let command_alternatives: Vec<CommandAlternative> = response
+            .alternatives
             .into_iter()
             .map(|alt| CommandAlternative {
                 command: alt.command,
@@ -370,7 +379,8 @@ Respond in valid JSON format:
             })
             .collect();
 
-        let installation_instructions: Vec<InstallationInstruction> = response.installation_instructions
+        let installation_instructions: Vec<InstallationInstruction> = response
+            .installation_instructions
             .into_iter()
             .map(|inst| InstallationInstruction {
                 command: inst.command.clone(),
@@ -421,14 +431,20 @@ Respond in valid JSON format:
             }
             "git" => {
                 alternatives.push(CommandAlternative {
-                    command: "echo 'Git is required for version control. Please install git first.'".to_string(),
-                    description: "Git cannot be easily replaced - installation required".to_string(),
+                    command:
+                        "echo 'Git is required for version control. Please install git first.'"
+                            .to_string(),
+                    description: "Git cannot be easily replaced - installation required"
+                        .to_string(),
                     confidence: 0.1,
                 });
             }
             _ => {
                 alternatives.push(CommandAlternative {
-                    command: format!("echo '{} command not found. Please install {} or find an alternative.'", missing_cmd, missing_cmd),
+                    command: format!(
+                        "echo '{} command not found. Please install {} or find an alternative.'",
+                        missing_cmd, missing_cmd
+                    ),
                     description: "No suitable alternative found".to_string(),
                     confidence: 0.1,
                 });
@@ -438,7 +454,10 @@ Respond in valid JSON format:
         Ok(alternatives)
     }
 
-    fn generate_fallback_instructions(&self, missing_cmd: &str) -> Result<Vec<InstallationInstruction>> {
+    fn generate_fallback_instructions(
+        &self,
+        missing_cmd: &str,
+    ) -> Result<Vec<InstallationInstruction>> {
         let mut instructions = Vec::new();
 
         match std::env::consts::OS {
@@ -467,7 +486,10 @@ Respond in valid JSON format:
             _ => {
                 instructions.push(InstallationInstruction {
                     command: missing_cmd.to_string(),
-                    install_commands: vec![format!("echo 'Please install {} using your system package manager'", missing_cmd)],
+                    install_commands: vec![format!(
+                        "echo 'Please install {} using your system package manager'",
+                        missing_cmd
+                    )],
                     package_managers: vec!["generic".to_string()],
                     confidence: 0.5,
                 });
@@ -478,19 +500,30 @@ Respond in valid JSON format:
     }
 
     /// Present recovery options to the user and get their choice
-    pub async fn present_recovery_menu(&self, options: &RecoveryOptions, missing: &MissingCommand) -> Result<RecoveryChoice> {
+    pub async fn present_recovery_menu(
+        &self,
+        options: &RecoveryOptions,
+        missing: &MissingCommand,
+    ) -> Result<RecoveryChoice> {
         println!();
         println!("{}", "🔍 Command Not Found Recovery".bold().yellow());
-        println!("The command '{}' is not available on your system.", missing.command.bold());
-        
+        println!(
+            "The command '{}' is not available on your system.",
+            missing.command.bold()
+        );
+
         if !options.command_alternatives.is_empty() {
             println!();
-            println!("🤖 AI generated {} alternative solutions:", options.command_alternatives.len());
-            
+            println!(
+                "🤖 AI generated {} alternative solutions:",
+                options.command_alternatives.len()
+            );
+
             for (i, alt) in options.command_alternatives.iter().enumerate() {
-                println!("  [{}] {} ({:.0}% confidence)",
-                    (i + 1).to_string().cyan(), 
-                    alt.command.green(), 
+                println!(
+                    "  [{}] {} ({:.0}% confidence)",
+                    (i + 1).to_string().cyan(),
+                    alt.command.green(),
                     alt.confidence
                 );
                 println!("      {}", alt.to_string());
@@ -500,13 +533,17 @@ Respond in valid JSON format:
 
         if !options.installation_instructions.is_empty() {
             println!("📦 Installation options:");
-            
+
             let base_offset = options.command_alternatives.len();
             for (i, inst) in options.installation_instructions.iter().enumerate() {
-                println!("  [{}] Install {} ({})",
+                println!(
+                    "  [{}] Install {} ({})",
                     (base_offset + i + 1).to_string().cyan(),
                     missing.command.bold(),
-                    inst.package_managers.first().unwrap_or(&"unknown".to_string()).dimmed()
+                    inst.package_managers
+                        .first()
+                        .unwrap_or(&"unknown".to_string())
+                        .dimmed()
                 );
                 println!("      {}", inst.to_string());
                 println!();
@@ -514,18 +551,22 @@ Respond in valid JSON format:
         }
 
         // Add skip, retry, and cancel options
-        let total_options = options.command_alternatives.len() + options.installation_instructions.len();
-        
+        let total_options =
+            options.command_alternatives.len() + options.installation_instructions.len();
+
         if options.can_skip_step {
-            println!("  [{}] Skip this step", (total_options + 1).to_string().cyan());
+            println!(
+                "  [{}] Skip this step",
+                (total_options + 1).to_string().cyan()
+            );
         }
-        
+
         if options.retry_possible {
             println!("  [retry] Retry original command",);
         }
-        
+
         println!("  {}", "[abort] Cancel entire plan".red());
-        
+
         let prompt_options = if options.can_skip_step {
             format!("[1-{}] or [skip/retry/abort]", total_options + 2)
         } else {
@@ -541,9 +582,14 @@ Respond in valid JSON format:
         self.parse_user_choice(choice, options, missing)
     }
 
-    fn parse_user_choice(&self, choice: &str, options: &RecoveryOptions, _missing: &MissingCommand) -> Result<RecoveryChoice> {
+    fn parse_user_choice(
+        &self,
+        choice: &str,
+        options: &RecoveryOptions,
+        _missing: &MissingCommand,
+    ) -> Result<RecoveryChoice> {
         let choice_lower = choice.trim().to_lowercase();
-        
+
         // Handle text-based choices
         if choice_lower == "skip" {
             if options.can_skip_step {
@@ -558,23 +604,29 @@ Respond in valid JSON format:
         if choice_lower == "abort" {
             return Ok(RecoveryChoice::AbortPlan);
         }
-        
+
         // Handle installation commands like "i1", "i2", etc.
         if choice_lower.starts_with('i') {
-            let inst_num = choice_lower[1..].parse::<usize>()
+            let inst_num = choice_lower[1..]
+                .parse::<usize>()
                 .context("Please enter a valid installation number (e.g., i1, i2)")?;
             if inst_num > 0 && inst_num <= options.installation_instructions.len() {
                 return Ok(RecoveryChoice::InstallCommand(inst_num - 1));
             } else {
-                return Err(anyhow!("Invalid installation number. Please enter i1-i{}", options.installation_instructions.len()));
+                return Err(anyhow!(
+                    "Invalid installation number. Please enter i1-i{}",
+                    options.installation_instructions.len()
+                ));
             }
         }
-        
+
         // Handle numeric choices
-        let choice_num = choice.parse::<usize>()
+        let choice_num = choice
+            .parse::<usize>()
             .context("Please enter a valid number")?;
 
-        let total_options = options.command_alternatives.len() + options.installation_instructions.len();
+        let total_options =
+            options.command_alternatives.len() + options.installation_instructions.len();
 
         // Check for command alternatives (1 to N where N = alternatives.len())
         if choice_num > 0 && choice_num <= options.command_alternatives.len() {
@@ -583,8 +635,9 @@ Respond in valid JSON format:
 
         // Check for installation instructions
         let install_start_idx = options.command_alternatives.len() + 1;
-        let install_end_idx = options.command_alternatives.len() + options.installation_instructions.len();
-        
+        let install_end_idx =
+            options.command_alternatives.len() + options.installation_instructions.len();
+
         if (install_start_idx..=install_end_idx).contains(&choice_num) {
             let inst_idx = choice_num - install_start_idx;
             return Ok(RecoveryChoice::InstallCommand(inst_idx));
@@ -596,46 +649,74 @@ Respond in valid JSON format:
         }
 
         // Invalid numeric choice
-        let max_choice = if options.can_skip_step { total_options + 1 } else { total_options };
-        Err(anyhow!("Please enter a number between 1 and {}, or use text options (skip/retry/abort)", max_choice))
+        let max_choice = if options.can_skip_step {
+            total_options + 1
+        } else {
+            total_options
+        };
+        Err(anyhow!(
+            "Please enter a number between 1 and {}, or use text options (skip/retry/abort)",
+            max_choice
+        ))
     }
 
     /// Execute the user's recovery choice
-    pub async fn execute_recovery(&mut self, choice: RecoveryChoice, context: &RecoveryContext) -> Result<RecoveryResult> {
+    pub async fn execute_recovery(
+        &mut self,
+        choice: RecoveryChoice,
+        context: &RecoveryContext,
+    ) -> Result<RecoveryResult> {
         match choice {
             RecoveryChoice::UseAlternative(index) => {
                 // Generate options to get the alternatives
-                let options = self.generate_recovery_options(&context.missing_command, &context.original_plan, &context.original_goal).await?;
+                let options = self
+                    .generate_recovery_options(
+                        &context.missing_command,
+                        &context.original_plan,
+                        &context.original_goal,
+                    )
+                    .await?;
                 if let Some(alternative) = options.command_alternatives.get(index) {
                     self.execute_alternative(alternative.clone(), context).await
                 } else {
-                    Ok(RecoveryResult::PlanAborted("Invalid alternative index".to_string()))
+                    Ok(RecoveryResult::PlanAborted(
+                        "Invalid alternative index".to_string(),
+                    ))
                 }
             }
             RecoveryChoice::InstallCommand(index) => {
                 // Generate options to get the installation instructions
-                let options = self.generate_recovery_options(&context.missing_command, &context.original_plan, &context.original_goal).await?;
+                let options = self
+                    .generate_recovery_options(
+                        &context.missing_command,
+                        &context.original_plan,
+                        &context.original_goal,
+                    )
+                    .await?;
                 if let Some(instruction) = options.installation_instructions.get(index) {
-                    self.execute_installation(instruction.clone(), context).await
+                    self.execute_installation(instruction.clone(), context)
+                        .await
                 } else {
-                    Ok(RecoveryResult::PlanAborted("Invalid installation index".to_string()))
+                    Ok(RecoveryResult::PlanAborted(
+                        "Invalid installation index".to_string(),
+                    ))
                 }
             }
-            RecoveryChoice::SkipStep => {
-                Ok(RecoveryResult::StepSkipped)
-            }
-            RecoveryChoice::AbortPlan => {
-                Ok(RecoveryResult::PlanAborted("User cancelled due to missing command".to_string()))
-            }
-            RecoveryChoice::RetryOriginal => {
-                Ok(RecoveryResult::RetryRequested)
-            }
+            RecoveryChoice::SkipStep => Ok(RecoveryResult::StepSkipped),
+            RecoveryChoice::AbortPlan => Ok(RecoveryResult::PlanAborted(
+                "User cancelled due to missing command".to_string(),
+            )),
+            RecoveryChoice::RetryOriginal => Ok(RecoveryResult::RetryRequested),
         }
     }
 
-    async fn execute_alternative(&self, alternative: CommandAlternative, _context: &RecoveryContext) -> Result<RecoveryResult> {
+    async fn execute_alternative(
+        &self,
+        alternative: CommandAlternative,
+        _context: &RecoveryContext,
+    ) -> Result<RecoveryResult> {
         println!("🔄 Using alternative: {}", alternative.command.green());
-        
+
         // Execute the alternative command
         let result = tokio::process::Command::new("sh")
             .arg("-c")
@@ -666,25 +747,35 @@ Respond in valid JSON format:
         }
     }
 
-    async fn execute_installation(&self, instruction: InstallationInstruction, context: &RecoveryContext) -> Result<RecoveryResult> {
+    async fn execute_installation(
+        &self,
+        instruction: InstallationInstruction,
+        context: &RecoveryContext,
+    ) -> Result<RecoveryResult> {
         if !self.config.recovery.auto_install {
-            println!("📦 Installation instructions for {}:", context.missing_command.command.bold());
+            println!(
+                "📦 Installation instructions for {}:",
+                context.missing_command.command.bold()
+            );
             println!("Command: {}", instruction.command.cyan());
             println!("Description: {}", instruction.to_string());
-            
+
             print!("Execute this installation command? [y/N]: ");
             io::stdout().flush()?;
-            
+
             let mut input = String::new();
             io::stdin().read_line(&mut input)?;
-            
+
             if input.trim().to_lowercase() != "y" {
                 return Ok(RecoveryResult::InstallationCancelled);
             }
         }
 
-        println!("📦 Installing {}...", context.missing_command.command.bold());
-        
+        println!(
+            "📦 Installing {}...",
+            context.missing_command.command.bold()
+        );
+
         let result = tokio::process::Command::new("sh")
             .arg("-c")
             .arg(&instruction.command)

@@ -1,7 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use super::{CommandAlternative, InstallationInstruction, RecoveryEngine, RecoveryOptions};
     use crate::config::{Config, RecoveryPreference};
+    use crate::recovery::{
+        CommandAlternative, InstallationInstruction, RecoveryEngine, RecoveryOptions,
+    };
     use crate::validator::MissingCommand;
 
     #[test]

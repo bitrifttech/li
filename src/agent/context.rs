@@ -142,8 +142,11 @@ impl AgentContext {
 
     pub fn record_validation(&mut self, validation: ValidationResult) {
         let missing = validation.missing_commands.len();
-        self.validation = Some(validation);
-        self.record_event(AgentEvent::ValidationFinished { missing });
+        self.validation = Some(validation.clone());
+        self.record_event(AgentEvent::ValidationFinished {
+            missing,
+            can_continue: validation.plan_can_continue,
+        });
     }
 
     pub fn record_execution(&mut self, report: ExecutionReport) {
@@ -168,6 +171,7 @@ impl AgentContext {
     pub fn into_run(self) -> AgentRun {
         let AgentContext {
             plan,
+            validation,
             execution,
             recovery,
             events,
@@ -180,6 +184,7 @@ impl AgentContext {
         } else {
             AgentOutcome::Planned {
                 plan,
+                validation,
                 execution,
                 recovery,
             }
@@ -209,7 +214,7 @@ pub enum AgentEvent {
     StageFailed { stage: StageKind, error: String },
     ClassificationReady(Classification),
     PlanReady { confidence: f32 },
-    ValidationFinished { missing: usize },
+    ValidationFinished { missing: usize, can_continue: bool },
     ExecutionFinished { success: bool },
     RecoveryFinished { outcome: RecoveryOutcome },
     Message(String),

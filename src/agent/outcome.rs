@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use crate::planner::Plan;
+use crate::validator::ValidationResult;
 
 use super::types::StageKind;
 
@@ -43,6 +44,7 @@ pub enum AgentOutcome {
     },
     Planned {
         plan: Option<Plan>,
+        validation: Option<ValidationResult>,
         execution: Option<ExecutionReport>,
         recovery: Option<RecoveryOutcome>,
     },

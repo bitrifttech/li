@@ -7,6 +7,7 @@ use async_trait::async_trait;
 
 use crate::classifier::{self, Classification};
 use crate::client::{LlmClientFactory, OpenRouterClientFactory};
+use crate::exec;
 use crate::planner::{self, Plan};
 use crate::validator::{self, ValidationResult};
 
@@ -123,6 +124,47 @@ impl ExecutionAdapter for NoopExecutionAdapter {
             stderr: None,
             notes: vec!["Execution adapter not configured".to_string()],
         })
+    }
+}
+
+/// Execution adapter that delegates to the shared plan executor when permitted.
+pub struct PlanExecutionAdapter {
+    assume_yes: bool,
+}
+
+impl PlanExecutionAdapter {
+    pub fn new() -> Self {
+        Self { assume_yes: false }
+    }
+
+    pub fn with_assume_yes(mut self, assume_yes: bool) -> Self {
+        self.assume_yes = assume_yes;
+        self
+    }
+}
+
+impl Default for PlanExecutionAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl ExecutionAdapter for PlanExecutionAdapter {
+    async fn execute(&self, context: &mut AgentContext, plan: &Plan) -> Result<ExecutionReport> {
+        if let Some(validation) = &context.validation {
+            if !validation.plan_can_continue {
+                return Ok(ExecutionReport::skipped(
+                    "Execution blocked: validator reported missing commands",
+                ));
+            }
+        }
+
+        if !self.assume_yes && !context.request.assume_yes {
+            return Ok(ExecutionReport::skipped("Execution requires user approval"));
+        }
+
+        exec::execution_report(plan).await
     }
 }
 

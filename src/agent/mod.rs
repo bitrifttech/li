@@ -6,6 +6,11 @@ pub mod stages;
 pub mod types;
 
 #[allow(unused_imports)]
+pub use adapters::{
+    CommandValidationAdapter, DirectClassifierAdapter, DirectPlanningAdapter, NoopExecutionAdapter,
+    NoopRecoveryAdapter, PlanExecutionAdapter,
+};
+#[allow(unused_imports)]
 pub use context::{AgentContext, AgentEvent, AgentRequest, AgentRun};
 #[allow(unused_imports)]
 pub use orchestrator::{AgentOrchestrator, AgentPipelineBuilder};
