@@ -1,32 +1,27 @@
 use anyhow::{Context, Result, anyhow};
 use dirs::home_dir;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
-    env, fs,
+    env, fmt, fs,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 pub(crate) const DEFAULT_MAX_TOKENS: u32 = 2048;
 const DEFAULT_CLASSIFIER_MODEL: &str = "nvidia/nemotron-nano-12b-v2-vl:free";
 const DEFAULT_PLANNER_MODEL: &str = "minimax/minimax-m2:free";
+const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Config {
-    pub api_key: String,
-    pub timeout_secs: u64,
-    pub max_tokens: u32,
-    pub classifier_model: String,
-    pub planner_model: String,
+fn default_user_agent() -> String {
+    format!("li/{}", env!("CARGO_PKG_VERSION"))
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct FileConfig {
-    openrouter_api_key: Option<String>,
-    timeout_secs: Option<u64>,
-    max_tokens: Option<u32>,
-    classifier_model: Option<String>,
-    planner_model: Option<String>,
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub llm: LlmSettings,
+    pub models: ModelSettings,
+    pub recovery: RecoverySettings,
 }
 
 impl Config {
@@ -36,94 +31,463 @@ impl Config {
         Ok(path)
     }
 
+    pub fn builder() -> ConfigBuilder {
+        ConfigBuilder::new()
+    }
+
     pub fn load() -> Result<Self> {
         let path = Self::config_path()?;
-        let file_cfg = Self::read_file_config(&path)?;
-        let FileConfig {
-            openrouter_api_key: file_openrouter_key,
-            timeout_secs: file_timeout,
-            max_tokens: file_max_tokens,
-            classifier_model: file_classifier,
-            planner_model: file_planner,
-        } = file_cfg;
+        let mut builder = ConfigBuilder::new();
 
-        // Get OpenRouter API key
-        let api_key = Self::env_string("OPENROUTER_API_KEY")?
-            .or(file_openrouter_key)
-            .map(|s| s.trim().to_owned())
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| {
-                anyhow!(
-                    "OpenRouter API key not found. Set OPENROUTER_API_KEY or add it to {}",
-                    path.display()
-                )
-            })?;
-
-        let timeout_secs = Self::env_u64("LI_TIMEOUT_SECS")?
-            .or(file_timeout)
-            .unwrap_or(DEFAULT_TIMEOUT_SECS);
-
-        let max_tokens = Self::env_u32("LI_MAX_TOKENS")?
-            .or(file_max_tokens)
-            .unwrap_or(DEFAULT_MAX_TOKENS);
-
-        let classifier_model = Self::env_string("LI_CLASSIFIER_MODEL")?
-            .or(file_classifier)
-            .unwrap_or_else(|| DEFAULT_CLASSIFIER_MODEL.to_string());
-
-        let planner_model = Self::env_string("LI_PLANNER_MODEL")?
-            .or(file_planner)
-            .unwrap_or_else(|| DEFAULT_PLANNER_MODEL.to_string());
-
-        Ok(Self {
-            api_key,
-            timeout_secs,
-            max_tokens,
-            classifier_model,
-            planner_model,
-        })
-    }
-
-    fn read_file_config(path: &Path) -> Result<FileConfig> {
-        if !path.exists() {
-            return Ok(FileConfig::default());
+        if path.exists() {
+            builder = Self::apply_file(builder, &path)?;
         }
 
+        builder = apply_env_overrides(builder)?;
+
+        let config = builder.build()?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn save(&self) -> Result<()> {
+        let path = Self::config_path()?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Unable to create config directory {}", parent.display())
+            })?;
+        }
+
+        let payload = PersistedConfig::from(self);
+        let json = serde_json::to_string_pretty(&payload)
+            .context("Failed to serialize configuration to JSON")?;
+        fs::write(&path, json)
+            .with_context(|| format!("Failed to write config to {}", path.display()))?;
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.llm.api_key.trim().is_empty() {
+            Err(anyhow!(
+                "OpenRouter API key not found. Set OPENROUTER_API_KEY or add it to {}",
+                Self::config_path()?.display()
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn apply_file(mut builder: ConfigBuilder, path: &Path) -> Result<ConfigBuilder> {
         let contents = fs::read_to_string(path)
             .with_context(|| format!("Failed reading config at {}", path.display()))?;
-        let file = serde_json::from_str(&contents)
+
+        if contents.trim().is_empty() {
+            return Ok(builder);
+        }
+
+        let raw: RawConfig = serde_json::from_str(&contents)
             .with_context(|| format!("Failed parsing JSON config at {}", path.display()))?;
-        Ok(file)
-    }
 
-    fn env_string(key: &str) -> Result<Option<String>> {
-        match env::var(key) {
-            Ok(val) => Ok(Some(val)),
-            Err(env::VarError::NotPresent) => Ok(None),
-            Err(env::VarError::NotUnicode(_)) => Err(anyhow!("{key} contains invalid UTF-8")),
+        builder = match raw {
+            RawConfig::Nested(cfg) => cfg.apply(builder),
+            RawConfig::Legacy(cfg) => cfg.apply(builder),
+        };
+
+        Ok(builder)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LlmSettings {
+    pub provider: LlmProvider,
+    pub api_key: String,
+    pub timeout_secs: u64,
+    pub base_url: String,
+    pub user_agent: String,
+}
+
+impl Default for LlmSettings {
+    fn default() -> Self {
+        Self {
+            provider: LlmProvider::OpenRouter,
+            api_key: String::new(),
+            timeout_secs: DEFAULT_TIMEOUT_SECS,
+            base_url: DEFAULT_OPENROUTER_BASE_URL.to_string(),
+            user_agent: default_user_agent(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LlmProvider {
+    OpenRouter,
+}
+
+impl fmt::Display for LlmProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LlmProvider::OpenRouter => write!(f, "openrouter"),
+        }
+    }
+}
+
+impl FromStr for LlmProvider {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "openrouter" => Ok(LlmProvider::OpenRouter),
+            other => Err(anyhow!("Unknown LLM provider '{other}'")),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelSettings {
+    pub classifier: String,
+    pub planner: String,
+    pub max_tokens: u32,
+}
+
+impl Default for ModelSettings {
+    fn default() -> Self {
+        Self {
+            classifier: DEFAULT_CLASSIFIER_MODEL.to_string(),
+            planner: DEFAULT_PLANNER_MODEL.to_string(),
+            max_tokens: DEFAULT_MAX_TOKENS,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RecoverySettings {
+    pub enabled: bool,
+    pub preference: RecoveryPreference,
+    pub auto_install: bool,
+}
+
+impl Default for RecoverySettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            preference: RecoveryPreference::NeverRecover,
+            auto_install: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecoveryPreference {
+    AlternativesFirst,
+    InstallationFirst,
+    SkipOnError,
+    NeverRecover,
+}
+
+impl fmt::Display for RecoveryPreference {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            RecoveryPreference::AlternativesFirst => "alternatives-first",
+            RecoveryPreference::InstallationFirst => "installation-first",
+            RecoveryPreference::SkipOnError => "skip-on-error",
+            RecoveryPreference::NeverRecover => "never-recover",
+        };
+        write!(f, "{label}")
+    }
+}
+
+impl FromStr for RecoveryPreference {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "alternatives-first" => Ok(RecoveryPreference::AlternativesFirst),
+            "installation-first" => Ok(RecoveryPreference::InstallationFirst),
+            "skip-on-error" => Ok(RecoveryPreference::SkipOnError),
+            "never-recover" => Ok(RecoveryPreference::NeverRecover),
+            other => Err(anyhow!("Unknown recovery preference '{other}'")),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ConfigBuilder {
+    llm: LlmSettings,
+    models: ModelSettings,
+    recovery: RecoverySettings,
+}
+
+impl ConfigBuilder {
+    pub fn new() -> Self {
+        Self {
+            llm: LlmSettings::default(),
+            models: ModelSettings::default(),
+            recovery: RecoverySettings::default(),
         }
     }
 
-    fn env_u64(key: &str) -> Result<Option<u64>> {
-        if let Some(value) = Self::env_string(key)? {
-            let parsed = value
-                .parse::<u64>()
-                .with_context(|| format!("Failed to parse {key} as u64"))?;
-            Ok(Some(parsed))
+    pub fn with_llm<F>(mut self, update: F) -> Self
+    where
+        F: FnOnce(&mut LlmSettings),
+    {
+        update(&mut self.llm);
+        self
+    }
+
+    pub fn with_models<F>(mut self, update: F) -> Self
+    where
+        F: FnOnce(&mut ModelSettings),
+    {
+        update(&mut self.models);
+        self
+    }
+
+    pub fn with_recovery<F>(mut self, update: F) -> Self
+    where
+        F: FnOnce(&mut RecoverySettings),
+    {
+        update(&mut self.recovery);
+        self
+    }
+
+    pub fn build(self) -> Result<Config> {
+        Ok(Config {
+            llm: self.llm,
+            models: self.models,
+            recovery: self.recovery,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawConfig {
+    Nested(FileConfigV2),
+    Legacy(FileConfigV1),
+}
+
+#[derive(Debug, Deserialize)]
+struct FileConfigV1 {
+    openrouter_api_key: Option<String>,
+    timeout_secs: Option<u64>,
+    max_tokens: Option<u32>,
+    classifier_model: Option<String>,
+    planner_model: Option<String>,
+}
+
+impl FileConfigV1 {
+    fn apply(self, builder: ConfigBuilder) -> ConfigBuilder {
+        builder
+            .with_llm(|llm| {
+                if let Some(api_key) = self.openrouter_api_key.clone() {
+                    llm.api_key = api_key;
+                }
+                if let Some(timeout) = self.timeout_secs {
+                    llm.timeout_secs = timeout;
+                }
+            })
+            .with_models(|models| {
+                if let Some(max_tokens) = self.max_tokens {
+                    models.max_tokens = max_tokens;
+                }
+                if let Some(classifier) = self.classifier_model.clone() {
+                    models.classifier = classifier;
+                }
+                if let Some(planner) = self.planner_model.clone() {
+                    models.planner = planner;
+                }
+            })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct FileConfigV2 {
+    llm: FileLlmSettings,
+    models: FileModelSettings,
+    #[serde(default)]
+    recovery: Option<FileRecoverySettings>,
+}
+
+impl FileConfigV2 {
+    fn apply(self, builder: ConfigBuilder) -> ConfigBuilder {
+        let builder = builder.with_llm(|llm| {
+            if let Some(provider) = self.llm.provider.clone() {
+                llm.provider = provider.parse().unwrap_or(LlmProvider::OpenRouter);
+            }
+            if let Some(api_key) = self.llm.api_key.clone() {
+                llm.api_key = api_key;
+            }
+            if let Some(timeout) = self.llm.timeout_secs {
+                llm.timeout_secs = timeout;
+            }
+            if let Some(base_url) = self.llm.base_url.clone() {
+                llm.base_url = base_url;
+            }
+            if let Some(user_agent) = self.llm.user_agent.clone() {
+                llm.user_agent = user_agent;
+            }
+        });
+
+        let builder = builder.with_models(|models| {
+            if let Some(classifier) = self.models.classifier.clone() {
+                models.classifier = classifier;
+            }
+            if let Some(planner) = self.models.planner.clone() {
+                models.planner = planner;
+            }
+            if let Some(max_tokens) = self.models.max_tokens {
+                models.max_tokens = max_tokens;
+            }
+        });
+
+        if let Some(recovery) = self.recovery {
+            builder.with_recovery(|settings| {
+                if let Some(enabled) = recovery.enabled {
+                    settings.enabled = enabled;
+                }
+                if let Some(preference) = recovery.preference {
+                    settings.preference = preference;
+                }
+                if let Some(auto_install) = recovery.auto_install {
+                    settings.auto_install = auto_install;
+                }
+            })
         } else {
-            Ok(None)
+            builder
         }
     }
+}
 
-    fn env_u32(key: &str) -> Result<Option<u32>> {
-        if let Some(value) = Self::env_string(key)? {
-            let parsed = value
-                .parse::<u32>()
-                .with_context(|| format!("Failed to parse {key} as u32"))?;
-            Ok(Some(parsed))
-        } else {
-            Ok(None)
+#[derive(Debug, Deserialize)]
+struct FileLlmSettings {
+    provider: Option<String>,
+    api_key: Option<String>,
+    timeout_secs: Option<u64>,
+    base_url: Option<String>,
+    user_agent: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FileModelSettings {
+    classifier: Option<String>,
+    planner: Option<String>,
+    max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct FileRecoverySettings {
+    enabled: Option<bool>,
+    preference: Option<RecoveryPreference>,
+    auto_install: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct PersistedConfig<'a> {
+    llm: PersistedLlm<'a>,
+    models: PersistedModels<'a>,
+    recovery: PersistedRecovery,
+}
+
+impl<'a> From<&'a Config> for PersistedConfig<'a> {
+    fn from(config: &'a Config) -> Self {
+        PersistedConfig {
+            llm: PersistedLlm {
+                provider: config.llm.provider,
+                api_key: &config.llm.api_key,
+                timeout_secs: config.llm.timeout_secs,
+                base_url: &config.llm.base_url,
+                user_agent: &config.llm.user_agent,
+            },
+            models: PersistedModels {
+                classifier: &config.models.classifier,
+                planner: &config.models.planner,
+                max_tokens: config.models.max_tokens,
+            },
+            recovery: PersistedRecovery {
+                enabled: config.recovery.enabled,
+                preference: config.recovery.preference,
+                auto_install: config.recovery.auto_install,
+            },
         }
+    }
+}
+
+#[derive(Serialize)]
+struct PersistedLlm<'a> {
+    provider: LlmProvider,
+    api_key: &'a str,
+    timeout_secs: u64,
+    base_url: &'a str,
+    user_agent: &'a str,
+}
+
+#[derive(Serialize)]
+struct PersistedModels<'a> {
+    classifier: &'a str,
+    planner: &'a str,
+    max_tokens: u32,
+}
+
+#[derive(Serialize)]
+struct PersistedRecovery {
+    enabled: bool,
+    preference: RecoveryPreference,
+    auto_install: bool,
+}
+
+fn apply_env_overrides(mut builder: ConfigBuilder) -> Result<ConfigBuilder> {
+    if let Some(api_key) = env_string("OPENROUTER_API_KEY")? {
+        builder = builder.with_llm(|llm| llm.api_key = api_key);
+    }
+
+    if let Some(timeout) = env_u64("LI_TIMEOUT_SECS")? {
+        builder = builder.with_llm(|llm| llm.timeout_secs = timeout);
+    }
+
+    if let Some(max_tokens) = env_u32("LI_MAX_TOKENS")? {
+        builder = builder.with_models(|models| models.max_tokens = max_tokens);
+    }
+
+    if let Some(classifier) = env_string("LI_CLASSIFIER_MODEL")? {
+        builder = builder.with_models(|models| models.classifier = classifier);
+    }
+
+    if let Some(planner) = env_string("LI_PLANNER_MODEL")? {
+        builder = builder.with_models(|models| models.planner = planner);
+    }
+
+    Ok(builder)
+}
+
+fn env_string(key: &str) -> Result<Option<String>> {
+    match env::var(key) {
+        Ok(val) => Ok(Some(val)),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => Err(anyhow!("{key} contains invalid UTF-8")),
+    }
+}
+
+fn env_u64(key: &str) -> Result<Option<u64>> {
+    if let Some(value) = env_string(key)? {
+        let parsed = value
+            .parse::<u64>()
+            .with_context(|| format!("Failed to parse {key} as u64"))?;
+        Ok(Some(parsed))
+    } else {
+        Ok(None)
+    }
+}
+
+fn env_u32(key: &str) -> Result<Option<u32>> {
+    if let Some(value) = env_string(key)? {
+        let parsed = value
+            .parse::<u32>()
+            .with_context(|| format!("Failed to parse {key} as u32"))?;
+        Ok(Some(parsed))
+    } else {
+        Ok(None)
     }
 }
 
@@ -185,11 +549,11 @@ mod tests {
         ]);
 
         let config = Config::load().unwrap();
-        assert_eq!(config.api_key, "env-key");
-        assert_eq!(config.timeout_secs, 45);
-        assert_eq!(config.max_tokens, 4096);
-        assert_eq!(config.classifier_model, "env-classifier");
-        assert_eq!(config.planner_model, "env-planner");
+        assert_eq!(config.llm.api_key, "env-key");
+        assert_eq!(config.llm.timeout_secs, 45);
+        assert_eq!(config.models.max_tokens, 4096);
+        assert_eq!(config.models.classifier, "env-classifier");
+        assert_eq!(config.models.planner, "env-planner");
     }
 
     #[test]
@@ -221,11 +585,11 @@ mod tests {
         ]);
 
         let config = Config::load().unwrap();
-        assert_eq!(config.api_key, "env-key");
-        assert_eq!(config.timeout_secs, 40);
-        assert_eq!(config.max_tokens, 1024);
-        assert_eq!(config.classifier_model, "file-classifier");
-        assert_eq!(config.planner_model, "env-planner");
+        assert_eq!(config.llm.api_key, "env-key");
+        assert_eq!(config.llm.timeout_secs, 40);
+        assert_eq!(config.models.max_tokens, 1024);
+        assert_eq!(config.models.classifier, "file-classifier");
+        assert_eq!(config.models.planner, "env-planner");
     }
 
     #[test]
@@ -247,4 +611,30 @@ mod tests {
         assert!(err.to_string().contains("OpenRouter API key not found"));
     }
 
+    #[test]
+    fn save_persists_nested_structure() {
+        let _lock = env_lock();
+        let temp_home = TempDir::new().unwrap();
+        let home = temp_home.path().to_str().unwrap().to_string();
+
+        let _env = EnvGuard::new(&[("HOME", Some(home.as_str()))]);
+
+        let mut config = Config::builder().build().unwrap();
+        config.llm.api_key = "test-key".to_string();
+        config.llm.timeout_secs = 55;
+        config.models.max_tokens = 999;
+        config.recovery.enabled = true;
+        config.recovery.preference = RecoveryPreference::SkipOnError;
+        config.recovery.auto_install = true;
+        config.save().unwrap();
+
+        let persisted = std::fs::read_to_string(Config::config_path().unwrap()).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&persisted).unwrap();
+        assert_eq!(json["llm"]["api_key"], "test-key");
+        assert_eq!(json["llm"]["timeout_secs"], 55);
+        assert_eq!(json["models"]["max_tokens"], 999);
+        assert_eq!(json["recovery"]["enabled"], true);
+        assert_eq!(json["recovery"]["preference"], "skip-on-error");
+        assert_eq!(json["recovery"]["auto_install"], true);
+    }
 }

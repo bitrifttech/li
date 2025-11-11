@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
 
-use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
+use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole, LlmClient};
+use crate::config::{Config, LlmProvider, LlmSettings, ModelSettings, RecoverySettings};
 
 const CLASSIFIER_SYSTEM_PROMPT: &str = r#"You are a STRICT JSON classifier for a shell assistant.
 
@@ -96,15 +97,23 @@ mod tests {
     use httpmock::prelude::*;
     use serde_json::json;
 
-    use crate::config::Config;
+    use crate::config::DEFAULT_MAX_TOKENS;
 
     fn sample_config() -> Config {
         Config {
-            api_key: "test-key".to_string(),
-            timeout_secs: 30,
-            max_tokens: 2048,
-            classifier_model: "nvidia/nemotron-nano-12b-v2-vl:free".to_string(),
-            planner_model: "minimax/minimax-m2:free".to_string(),
+            llm: LlmSettings {
+                provider: LlmProvider::OpenRouter,
+                api_key: "test-key".to_string(),
+                timeout_secs: 30,
+                base_url: "https://openrouter.ai/api/v1".to_string(),
+                user_agent: "li/test".to_string(),
+            },
+            models: ModelSettings {
+                classifier: "nvidia/nemotron-nano-12b-v2-vl:free".to_string(),
+                planner: "minimax/minimax-m2:free".to_string(),
+                max_tokens: DEFAULT_MAX_TOKENS,
+            },
+            recovery: RecoverySettings::default(),
         }
     }
 
@@ -151,10 +160,11 @@ mod tests {
             })
             .await;
 
-        let config = sample_config();
-        let client = AIClient::new(&config).unwrap();
+        let mut config = sample_config();
+        config.llm.base_url = server.url("/v1");
+        let client = AIClient::new(&config.llm).unwrap();
 
-        let classification = classify(&client, "git status", &config.classifier_model)
+        let classification = classify(&client, "git status", &config.models.classifier)
             .await
             .unwrap();
 
@@ -187,10 +197,11 @@ mod tests {
             })
             .await;
 
-        let config = sample_config();
-        let client = AIClient::new(&config).unwrap();
+        let mut config = sample_config();
+        config.llm.base_url = server.url("/v1");
+        let client = AIClient::new(&config.llm).unwrap();
 
-        let classification = classify(&client, "make a new git repo", &config.classifier_model)
+        let classification = classify(&client, "make a new git repo", &config.models.classifier)
             .await
             .unwrap();
 
@@ -222,10 +233,11 @@ mod tests {
             })
             .await;
 
-        let config = sample_config();
-        let client = AIClient::new(&config).unwrap();
+        let mut config = sample_config();
+        config.llm.base_url = server.url("/v1");
+        let client = AIClient::new(&config.llm).unwrap();
 
-        let err = classify(&client, "git status", &config.classifier_model)
+        let err = classify(&client, "git status", &config.models.classifier)
             .await
             .unwrap_err();
 

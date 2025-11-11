@@ -1,22 +1,40 @@
-use std::time::Duration;
-
 use anyhow::{Context, Result, anyhow};
-use reqwest::Client;
+use async_trait::async_trait;
+use reqwest::{Client, StatusCode, header::HeaderMap};
 use serde::{Deserialize, Serialize};
+use tokio::time::{Duration, sleep};
 
-use crate::config::Config;
+use crate::config::{LlmProvider, LlmSettings};
+
+const MAX_RETRIES: usize = 3;
+
+#[async_trait]
+pub trait LlmClient {
+    async fn chat_completion(
+        &self,
+        request: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse>;
+}
 
 #[derive(Debug, Clone)]
-pub struct AIClient {
+pub struct OpenRouterClient {
     http: Client,
     base_url: String,
     api_key: String,
     user_agent: String,
+    retry_base_delay: Duration,
 }
 
-impl AIClient {
-    pub fn new(config: &Config) -> Result<Self> {
-        let timeout = Duration::from_secs(config.timeout_secs);
+impl OpenRouterClient {
+    pub fn new(settings: &LlmSettings) -> Result<Self> {
+        if settings.provider != LlmProvider::OpenRouter {
+            return Err(anyhow!(
+                "Unsupported LLM provider '{}'. Only OpenRouter is currently supported.",
+                settings.provider
+            ));
+        }
+
+        let timeout = Duration::from_secs(settings.timeout_secs);
         let http = Client::builder()
             .timeout(timeout)
             .build()
@@ -24,19 +42,16 @@ impl AIClient {
 
         Ok(Self {
             http,
-            base_url: "https://openrouter.ai/api/v1".to_string(),
-            api_key: config.api_key.clone(),
-            user_agent: format!("li/{}", env!("CARGO_PKG_VERSION")),
+            base_url: settings.base_url.clone(),
+            api_key: settings.api_key.clone(),
+            user_agent: settings.user_agent.clone(),
+            retry_base_delay: Duration::from_secs(1),
         })
     }
 
-    pub async fn chat_completion(
-        &self,
-        request: ChatCompletionRequest,
-    ) -> Result<ChatCompletionResponse> {
+    async fn execute_once(&self, request: &ChatCompletionRequest) -> Result<ResponseOutcome> {
         let url = format!("{}/chat/completions", self.base_url);
-
-        let req_builder = self
+        let response = self
             .http
             .post(&url)
             .bearer_auth(&self.api_key)
@@ -44,50 +59,88 @@ impl AIClient {
             .header("Content-Type", "application/json")
             .header("HTTP-Referer", "https://github.com/bitrifttech/li")
             .header("X-Title", "li CLI")
-            .json(&request);
-
-        let response = req_builder
+            .json(request)
             .send()
             .await
             .context("Failed to send request to chat completions endpoint")?;
 
         match response.status() {
-            reqwest::StatusCode::OK => {
-                response.json::<ChatCompletionResponse>().await
-                    .context("Failed to parse chat completion response JSON")
+            StatusCode::OK => {
+                let body = response
+                    .json::<ChatCompletionResponse>()
+                    .await
+                    .context("Failed to parse chat completion response JSON")?;
+                Ok(ResponseOutcome::Success(body))
             }
-            reqwest::StatusCode::TOO_MANY_REQUESTS => {
-                let error_text = response.text().await.unwrap_or_default();
-                let error_msg = if error_text.contains("per second") {
-                    "Rate limit exceeded. Please wait a moment and try again."
-                } else if error_text.contains("traffic") {
-                    "Service is experiencing high traffic. Please try again in a few moments."
-                } else {
-                    "Too many requests. Please wait before trying again."
-                };
-                Err(anyhow!("{} (API response: {})", error_msg, error_text))
+            StatusCode::TOO_MANY_REQUESTS => {
+                let wait = parse_retry_after(response.headers()).unwrap_or(self.retry_base_delay);
+                let message = response.text().await.unwrap_or_default();
+                Ok(ResponseOutcome::Retry(wait, message))
             }
-            reqwest::StatusCode::UNAUTHORIZED => {
-                Err(anyhow!("Invalid API key. Please check your API key configuration."))
+            StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::GATEWAY_TIMEOUT => {
+                let wait = self.retry_base_delay * 2;
+                let message = response.text().await.unwrap_or_default();
+                Ok(ResponseOutcome::Retry(wait, message))
             }
-            reqwest::StatusCode::BAD_REQUEST => {
+            StatusCode::UNAUTHORIZED => Err(anyhow!(
+                "Invalid API key. Please check your API key configuration."
+            )),
+            StatusCode::BAD_REQUEST => {
                 let error_text = response.text().await.unwrap_or_default();
                 Err(anyhow!("Invalid request: {}", error_text))
             }
-            reqwest::StatusCode::INTERNAL_SERVER_ERROR | reqwest::StatusCode::SERVICE_UNAVAILABLE => {
-                Err(anyhow!("Service is temporarily unavailable. Please try again later."))
-            }
             status => {
-                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-                Err(anyhow!(
-                    "API error (status {}): {}",
-                    status,
-                    error_text
-                ))
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
+                Err(anyhow!("API error (status {}): {}", status, error_text))
             }
         }
     }
 }
+
+#[async_trait]
+impl LlmClient for OpenRouterClient {
+    async fn chat_completion(
+        &self,
+        request: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            match self.execute_once(&request).await? {
+                ResponseOutcome::Success(response) => return Ok(response),
+                ResponseOutcome::Retry(delay, message) => {
+                    if attempt > MAX_RETRIES {
+                        return Err(anyhow!(
+                            "OpenRouter request failed after retries: {}",
+                            message
+                        ));
+                    }
+                    sleep(delay).await;
+                }
+            }
+        }
+    }
+}
+
+enum ResponseOutcome {
+    Success(ChatCompletionResponse),
+    Retry(Duration, String),
+}
+
+fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
+    headers
+        .get("Retry-After")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_secs)
+}
+
+pub type AIClient = OpenRouterClient;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatCompletionRequest {
@@ -123,5 +176,3 @@ pub struct ChatChoice {
     pub message: ChatMessage,
     pub finish_reason: Option<String>,
 }
-
-// Re-export for backward compatibility

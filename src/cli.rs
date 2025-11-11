@@ -1,13 +1,11 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
 use serde::Deserialize;
-use serde_json;
-use std::fs;
 use std::io::{self, Write};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 
-use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
+use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole, LlmClient};
 use crate::config::{Config, DEFAULT_MAX_TOKENS};
 use crate::{classifier, planner};
 
@@ -47,7 +45,7 @@ struct OpenRouterModelsResponse {
 
 async fn fetch_openrouter_free_models(api_key: &str) -> Result<Vec<OpenRouterModel>> {
     use reqwest::Client;
-    
+
     let client = Client::new();
     let response = client
         .get("https://openrouter.ai/api/v1/models")
@@ -83,28 +81,33 @@ async fn fetch_openrouter_free_models(api_key: &str) -> Result<Vec<OpenRouterMod
 
 async fn select_model_interactively(models: Vec<OpenRouterModel>) -> Result<String> {
     println!("\n🤖 Available OpenRouter Free Models:\n");
-    
+
     for (idx, model) in models.iter().enumerate() {
-        let context_len = model.context_length
+        let context_len = model
+            .context_length
             .map(|len| format!(" ({} context)", len))
             .unwrap_or_default();
         println!("  {}. {}{}", idx + 1, model.name, context_len);
     }
-    
+
     print!("\nSelect a model (1-{}): ", models.len());
     io::stdout().flush()?;
-    
+
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
-    
-    let selection: usize = input.trim()
+
+    let selection: usize = input
+        .trim()
         .parse()
         .context("Please enter a valid number")?;
-    
+
     if selection == 0 || selection > models.len() {
-        return Err(anyhow!("Please select a number between 1 and {}", models.len()));
+        return Err(anyhow!(
+            "Please select a number between 1 and {}",
+            models.len()
+        ));
     }
-    
+
     Ok(models[selection - 1].id.clone())
 }
 
@@ -199,7 +202,6 @@ pub struct ChatArgs {
     prompt: Vec<String>,
 }
 
-
 impl Cli {
     pub async fn run_setup(self) -> Result<()> {
         handle_setup().await
@@ -208,15 +210,25 @@ impl Cli {
     pub async fn run(self, mut config: Config) -> Result<()> {
         // Check for empty task (show welcome message)
         let prompt = self.task.join(" ").trim().to_owned();
-        if prompt.is_empty() && !self.setup && !self.chat && !self.intelligence && !self.config && self.command.is_none() && self.model.is_none() && 
-           self.api_key.is_none() && self.timeout.is_none() && self.max_tokens.is_none() && 
-           self.classifier_model.is_none() && self.planner_model.is_none() {
+        if prompt.is_empty()
+            && !self.setup
+            && !self.chat
+            && !self.intelligence
+            && !self.config
+            && self.command.is_none()
+            && self.model.is_none()
+            && self.api_key.is_none()
+            && self.timeout.is_none()
+            && self.max_tokens.is_none()
+            && self.classifier_model.is_none()
+            && self.planner_model.is_none()
+        {
             // Check if config file exists
             let config_path = Config::config_path()?;
             let config_exists = config_path.exists();
-            
+
             println!("🚀 Welcome to li - Your AI-Powered CLI Assistant!");
-        println!("   📱 Project: https://github.com/bitrifttech/li");
+            println!("   📱 Project: https://github.com/bitrifttech/li");
             println!();
             println!("📖 What li does:");
             println!("   • Converts natural language to shell commands");
@@ -224,38 +236,58 @@ impl Cli {
             println!("   • Executes safe, minimal command plans");
             println!("   • Powered by OpenRouter's free AI models");
             println!();
-            
+
             if !config_exists {
                 println!("⚠️  Configuration not found. Let's get you set up!");
                 println!("   Run: li --setup");
                 println!();
             }
-            
+
             println!("💡 How to use li:");
-            println!("   li --setup                                         # Interactive first-time setup");
-            println!("   li 'list all files in current directory'           # Plan & execute commands");
-            println!("   li --chat 'what is the capital of France?'         # Direct AI conversation");
+            println!(
+                "   li --setup                                         # Interactive first-time setup"
+            );
+            println!(
+                "   li 'list all files in current directory'           # Plan & execute commands"
+            );
+            println!(
+                "   li --chat 'what is the capital of France?'         # Direct AI conversation"
+            );
             println!("   li --classify 'git status'                         # Classify input only");
-            println!("   li -i 'df -h'                                      # Explain command output with AI");
-            println!("   li -i -q 'Which disk has the most space?' 'df -h'  # Ask a question about output");
-            println!("   li --model                                         # Interactive model selection");
-            println!("   li --model list                                    # Show available models");
-            println!("   li --config --api-key YOUR_KEY                     # Set API key manually");
-            println!("   li --config --timeout 60                           # Set timeout in seconds");
+            println!(
+                "   li -i 'df -h'                                      # Explain command output with AI"
+            );
+            println!(
+                "   li -i -q 'Which disk has the most space?' 'df -h'  # Ask a question about output"
+            );
+            println!(
+                "   li --model                                         # Interactive model selection"
+            );
+            println!(
+                "   li --model list                                    # Show available models"
+            );
+            println!(
+                "   li --config --api-key YOUR_KEY                     # Set API key manually"
+            );
+            println!(
+                "   li --config --timeout 60                           # Set timeout in seconds"
+            );
             println!("   li --config --max-tokens 4096                      # Set max tokens");
-            println!("   li --config --classifier-model MODEL               # Set classifier model");
+            println!(
+                "   li --config --classifier-model MODEL               # Set classifier model"
+            );
             println!("   li --config --planner-model MODEL                  # Set planner model");
             println!();
-            
+
             if config_exists {
                 // Load config just to show current settings
                 match Config::load() {
                     Ok(loaded_config) => {
                         println!("📋 Your current configuration:");
-                        println!("   Provider: OpenRouter");
-                        println!("   Classifier: {}", loaded_config.classifier_model);
-                        println!("   Planner: {}", loaded_config.planner_model);
-                        println!("   Timeout: {}s", loaded_config.timeout_secs);
+                        println!("   Provider: {}", loaded_config.llm.provider);
+                        println!("   Classifier: {}", loaded_config.models.classifier);
+                        println!("   Planner: {}", loaded_config.models.planner);
+                        println!("   Timeout: {}s", loaded_config.llm.timeout_secs);
                         println!();
                     }
                     Err(_) => {
@@ -265,17 +297,17 @@ impl Cli {
                     }
                 }
             }
-            
+
             println!("❓ For more help: li --help");
-            
+
             return Ok(());
         }
-        
+
         // Handle setup flag (no config required)
         if self.setup {
             return handle_setup().await;
         }
-        
+
         // Handle chat flag
         if self.chat {
             let prompt = self.task.join(" ").trim().to_owned();
@@ -284,14 +316,15 @@ impl Cli {
             }
             return handle_chat_direct(&prompt, &config).await;
         }
-        
+
         // Handle model override
         if let Some(ref model_arg) = self.model {
-            let models = fetch_openrouter_free_models(&config.api_key).await?;
+            let models = fetch_openrouter_free_models(&config.llm.api_key).await?;
             if model_arg == "list" {
                 // Just list the models
                 for model in models {
-                    let context_len = model.context_length
+                    let context_len = model
+                        .context_length
                         .map(|len| format!(" ({} context)", len))
                         .unwrap_or_default();
                     println!("{}: {}{}", model.id, model.name, context_len);
@@ -301,31 +334,36 @@ impl Cli {
                 // Interactive selection for both classifier and planner models
                 println!("\n🤖 Available Free Models:\n");
                 for (idx, model) in models.iter().enumerate() {
-                    let context_len = model.context_length
+                    let context_len = model
+                        .context_length
                         .map(|len| format!(" ({} context)", len))
                         .unwrap_or_default();
                     println!("  {}. {}{}", idx + 1, model.name, context_len);
                 }
-                
+
                 // Get classifier model
                 let classifier_index = loop {
-                    print!("\n🧠 Select classifier model (determines if input is a command or needs planning): ");
+                    print!(
+                        "\n🧠 Select classifier model (determines if input is a command or needs planning): "
+                    );
                     io::stdout().flush()?;
-                    
+
                     let mut input = String::new();
                     io::stdin().read_line(&mut input)?;
                     let choice = input.trim();
-                    
+
                     if choice.is_empty() {
                         println!("❌ Please select a model number.");
                         continue;
                     }
-                    
+
                     match choice.parse::<usize>() {
                         Ok(num) if num >= 1 && num <= models.len() => {
                             break num - 1;
                         }
-                        Ok(_) => println!("❌ Please enter a number between 1 and {}.", models.len()),
+                        Ok(_) => {
+                            println!("❌ Please enter a number between 1 and {}.", models.len())
+                        }
                         Err(_) => println!("❌ Please enter a valid number."),
                     }
                 };
@@ -333,23 +371,27 @@ impl Cli {
 
                 // Get planner model
                 let planner_index = loop {
-                    print!("\n📋 Select planner model (creates shell commands from natural language): ");
+                    print!(
+                        "\n📋 Select planner model (creates shell commands from natural language): "
+                    );
                     io::stdout().flush()?;
-                    
+
                     let mut input = String::new();
                     io::stdin().read_line(&mut input)?;
                     let choice = input.trim();
-                    
+
                     if choice.is_empty() {
                         println!("❌ Please select a model number.");
                         continue;
                     }
-                    
+
                     match choice.parse::<usize>() {
                         Ok(num) if num >= 1 && num <= models.len() => {
                             break num - 1;
                         }
-                        Ok(_) => println!("❌ Please enter a number between 1 and {}.", models.len()),
+                        Ok(_) => {
+                            println!("❌ Please enter a number between 1 and {}.", models.len())
+                        }
                         Err(_) => println!("❌ Please enter a valid number."),
                     }
                 };
@@ -358,31 +400,20 @@ impl Cli {
                 let derived_max_tokens = derive_max_tokens(planner_selection.context_length);
 
                 // Update config
-                config.classifier_model = classifier_model.clone();
-                config.planner_model = planner_model.clone();
-                config.max_tokens = derived_max_tokens;
+                config.models.classifier = classifier_model.clone();
+                config.models.planner = planner_model.clone();
+                config.models.max_tokens = derived_max_tokens;
 
-                // Save updated config
-                let config_path = Config::config_path()?;
-                if let Some(parent) = config_path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                
-                let config_json = serde_json::json!({
-                    "openrouter_api_key": config.api_key,
-                    "timeout_secs": config.timeout_secs,
-                    "max_tokens": config.max_tokens,
-                    "classifier_model": config.classifier_model,
-                    "planner_model": config.planner_model,
-                });
-                
-                fs::write(&config_path, serde_json::to_string_pretty(&config_json)?)?;
-                
-                println!("\n✅ Model configuration saved to {}", config_path.display());
+                config.save()?;
+
+                println!(
+                    "\n✅ Model configuration saved to {}",
+                    Config::config_path()?.display()
+                );
                 println!("📋 Updated configuration:");
-                println!("   Classifier Model: {}", config.classifier_model);
-                println!("   Planner Model: {}", config.planner_model);
-                println!("   Max Tokens: {}", config.max_tokens);
+                println!("   Classifier Model: {}", config.models.classifier);
+                println!("   Planner Model: {}", config.models.planner);
+                println!("   Max Tokens: {}", config.models.max_tokens);
 
                 return Ok(());
             } else {
@@ -394,26 +425,31 @@ impl Cli {
                     return Ok(());
                 }
                 if let Some(selected) = models.iter().find(|m| m.id == *model_arg) {
-                    config.max_tokens = derive_max_tokens(selected.context_length);
+                    config.models.max_tokens = derive_max_tokens(selected.context_length);
                 }
-                config.planner_model = model_arg.clone();
-                config.classifier_model = model_arg.clone();
+                config.models.planner = model_arg.clone();
+                config.models.classifier = model_arg.clone();
             }
         }
-        
+
         // Handle intelligence flag
         if self.intelligence {
             handle_intelligence(self.question.clone(), self.task, &config).await?;
             return Ok(());
         }
-        
+
         // Handle config flags
-        if self.config || self.api_key.is_some() || self.timeout.is_some() || self.max_tokens.is_some() || 
-           self.classifier_model.is_some() || self.planner_model.is_some() {
+        if self.config
+            || self.api_key.is_some()
+            || self.timeout.is_some()
+            || self.max_tokens.is_some()
+            || self.classifier_model.is_some()
+            || self.planner_model.is_some()
+        {
             handle_config_direct(&self, &mut config).await?;
             return Ok(());
         }
-        
+
         match self.command {
             Some(Command::Chat(args)) => handle_chat(args, &config).await?,
             None => handle_task(self.task, self.classify, &config).await?,
@@ -428,11 +464,11 @@ async fn handle_chat(args: ChatArgs, config: &Config) -> Result<()> {
         bail!("Prompt cannot be empty");
     }
 
-    let model = args.model.unwrap_or_else(|| config.planner_model.clone());
-    let max_tokens = args.max_tokens.unwrap_or(config.max_tokens);
+    let model = args.model.unwrap_or_else(|| config.models.planner.clone());
+    let max_tokens = args.max_tokens.unwrap_or(config.models.max_tokens);
     let temperature = args.temperature;
 
-    let client = AIClient::new(config)?;
+    let client = AIClient::new(&config.llm)?;
     let response = client
         .chat_completion(ChatCompletionRequest {
             model: model.clone(),
@@ -452,16 +488,13 @@ async fn handle_chat(args: ChatArgs, config: &Config) -> Result<()> {
         println!("\nChoice {}:", idx + 1);
         println!("{}", choice.message.content.trim());
 
-
         if let Some(reason) = &choice.finish_reason {
             println!("Finish reason: {}", reason);
         }
     }
 
-
     Ok(())
 }
-
 
 async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Result<()> {
     let prompt = words.join(" ").trim().to_owned();
@@ -472,11 +505,12 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
         return Ok(());
     }
 
-    let client = AIClient::new(config)?;
+    let client = AIClient::new(&config.llm)?;
 
     // Only classify if --classify flag is set (used by shell hook)
     let plan = if classify {
-        let classification = classifier::classify(&client, &prompt, &config.classifier_model).await
+        let classification = classifier::classify(&client, &prompt, &config.models.classifier)
+            .await
             .map_err(|e| {
                 if e.to_string().contains("Rate limit") {
                     anyhow!("Classification service is rate limited. Please try again in a moment.")
@@ -486,9 +520,9 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
                     e
                 }
             })?;
-        
+
         println!("Provider: OpenRouter");
-        println!("Classifier Model: {}", config.classifier_model);
+        println!("Classifier Model: {}", config.models.classifier);
         match classification {
             classifier::Classification::Terminal => {
                 // Direct execution for terminal commands
@@ -501,35 +535,51 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
             }
             classifier::Classification::NaturalLanguage => {
                 // Planning for natural language
-                planner::plan(&client, &prompt, &config.planner_model, config.max_tokens).await
-                    .map_err(|e| {
-                        if e.to_string().contains("Rate limit") {
-                            anyhow!("Planner service is rate limited. Please wait a moment and try again.")
-                        } else if e.to_string().contains("high traffic") {
-                            anyhow!("Planner service is experiencing high traffic. Please try again soon.")
-                        } else if e.to_string().contains("Planning cancelled") {
-                            e // Keep the cancellation message as-is
-                        } else {
-                            e
-                        }
-                    })?
+                planner::plan(
+                    &client,
+                    &prompt,
+                    &config.models.planner,
+                    config.models.max_tokens,
+                )
+                .await
+                .map_err(|e| {
+                    if e.to_string().contains("Rate limit") {
+                        anyhow!(
+                            "Planner service is rate limited. Please wait a moment and try again."
+                        )
+                    } else if e.to_string().contains("high traffic") {
+                        anyhow!(
+                            "Planner service is experiencing high traffic. Please try again soon."
+                        )
+                    } else if e.to_string().contains("Planning cancelled") {
+                        e // Keep the cancellation message as-is
+                    } else {
+                        e
+                    }
+                })?
             }
         }
     } else {
         // Direct planning without classification
-        planner::plan(&client, &prompt, &config.planner_model, config.max_tokens).await
-            .map_err(|e| {
-                if e.to_string().contains("Rate limit") {
-                    anyhow!("Planner service is rate limited. Please wait a moment and try again.")
-                } else if e.to_string().contains("high traffic") {
-                    anyhow!("Planner service is experiencing high traffic. Please try again soon.")
-                } else if e.to_string().contains("Planning cancelled") {
-                    e // Keep the cancellation message as-is
-                } else {
-                    e
-                }
-            })?
-    }; 
+        planner::plan(
+            &client,
+            &prompt,
+            &config.models.planner,
+            config.models.max_tokens,
+        )
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("Rate limit") {
+                anyhow!("Planner service is rate limited. Please wait a moment and try again.")
+            } else if e.to_string().contains("high traffic") {
+                anyhow!("Planner service is experiencing high traffic. Please try again soon.")
+            } else if e.to_string().contains("Planning cancelled") {
+                e // Keep the cancellation message as-is
+            } else {
+                e
+            }
+        })?
+    };
     render_plan(&plan, config);
 
     match prompt_for_approval()? {
@@ -550,7 +600,7 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
 
 fn render_plan(plan: &planner::Plan, config: &Config) {
     println!("\nProvider: OpenRouter");
-    println!("Model: {}", config.planner_model);
+    println!("Model: {}", config.models.planner);
     println!("Plan confidence: {:.2}", plan.confidence);
 
     if !plan.dry_run_commands.is_empty() {
@@ -570,7 +620,6 @@ fn render_plan(plan: &planner::Plan, config: &Config) {
     if !plan.notes.trim().is_empty() {
         println!("\nNotes: {}", plan.notes.trim());
     }
-
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -601,7 +650,12 @@ async fn execute_plan(plan: &planner::Plan) -> Result<()> {
     if !plan.dry_run_commands.is_empty() {
         println!("\n[Dry-run Phase]");
         for (idx, cmd) in plan.dry_run_commands.iter().enumerate() {
-            println!("\n> Running check {}/{}: {}", idx + 1, plan.dry_run_commands.len(), cmd);
+            println!(
+                "\n> Running check {}/{}: {}",
+                idx + 1,
+                plan.dry_run_commands.len(),
+                cmd
+            );
             let success = run_command(cmd).await?;
             if !success {
                 bail!("Dry-run check failed: {}", cmd);
@@ -613,7 +667,12 @@ async fn execute_plan(plan: &planner::Plan) -> Result<()> {
     if !plan.execute_commands.is_empty() {
         println!("\n[Execute Phase]");
         for (idx, cmd) in plan.execute_commands.iter().enumerate() {
-            println!("\n> Executing {}/{}: {}", idx + 1, plan.execute_commands.len(), cmd);
+            println!(
+                "\n> Executing {}/{}: {}",
+                idx + 1,
+                plan.execute_commands.len(),
+                cmd
+            );
             let success = run_command(cmd).await?;
             if !success {
                 bail!("Command failed: {}", cmd);
@@ -627,27 +686,32 @@ async fn execute_plan(plan: &planner::Plan) -> Result<()> {
 
 async fn execute_plan_with_capture(plan: &planner::Plan) -> Result<String> {
     use std::process::Command;
-    
+
     println!("\n=== Executing Plan ===");
     let mut all_output = String::new();
 
     if !plan.dry_run_commands.is_empty() {
         println!("\n[Dry-run Phase]");
         all_output.push_str("[Dry-run Phase]\n");
-        
+
         for (idx, cmd) in plan.dry_run_commands.iter().enumerate() {
-            println!("\n> Running check {}/{}: {}", idx + 1, plan.dry_run_commands.len(), cmd);
+            println!(
+                "\n> Running check {}/{}: {}",
+                idx + 1,
+                plan.dry_run_commands.len(),
+                cmd
+            );
             all_output.push_str(&format!("\nCommand: {}\n", cmd));
-            
+
             let output = Command::new("sh")
                 .arg("-c")
                 .arg(cmd)
                 .output()
                 .context("Failed to execute dry-run command")?;
-            
+
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            
+
             if !stdout.trim().is_empty() {
                 println!("\n┌─ COMMAND OUTPUT: {}", cmd);
                 println!("│");
@@ -657,7 +721,7 @@ async fn execute_plan_with_capture(plan: &planner::Plan) -> Result<String> {
                 println!("│");
                 all_output.push_str(&stdout);
             }
-            
+
             if !stderr.trim().is_empty() {
                 eprintln!("│");
                 for line in stderr.lines() {
@@ -665,11 +729,14 @@ async fn execute_plan_with_capture(plan: &planner::Plan) -> Result<String> {
                 }
                 all_output.push_str(&stderr);
             }
-            
+
             if output.status.success() {
                 println!("└─ Command completed successfully");
             } else {
-                println!("└─ Command failed with exit code {:?}", output.status.code());
+                println!(
+                    "└─ Command failed with exit code {:?}",
+                    output.status.code()
+                );
                 bail!("Dry-run check failed: {}", cmd);
             }
         }
@@ -680,20 +747,25 @@ async fn execute_plan_with_capture(plan: &planner::Plan) -> Result<String> {
     if !plan.execute_commands.is_empty() {
         println!("\n[Execute Phase]");
         all_output.push_str("\n[Execute Phase]\n");
-        
+
         for (idx, cmd) in plan.execute_commands.iter().enumerate() {
-            println!("\n> Executing {}/{}: {}", idx + 1, plan.execute_commands.len(), cmd);
+            println!(
+                "\n> Executing {}/{}: {}",
+                idx + 1,
+                plan.execute_commands.len(),
+                cmd
+            );
             all_output.push_str(&format!("\nCommand: {}\n", cmd));
-            
+
             let output = Command::new("sh")
                 .arg("-c")
                 .arg(cmd)
                 .output()
                 .context("Failed to execute command")?;
-            
+
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            
+
             if !stdout.trim().is_empty() {
                 println!("\n┌─ COMMAND OUTPUT: {}", cmd);
                 println!("│");
@@ -703,7 +775,7 @@ async fn execute_plan_with_capture(plan: &planner::Plan) -> Result<String> {
                 println!("│");
                 all_output.push_str(&stdout);
             }
-            
+
             if !stderr.trim().is_empty() {
                 eprintln!("│");
                 for line in stderr.lines() {
@@ -711,11 +783,14 @@ async fn execute_plan_with_capture(plan: &planner::Plan) -> Result<String> {
                 }
                 all_output.push_str(&stderr);
             }
-            
+
             if output.status.success() {
                 println!("└─ Command completed successfully");
             } else {
-                println!("└─ Command failed with exit code {:?}", output.status.code());
+                println!(
+                    "└─ Command failed with exit code {:?}",
+                    output.status.code()
+                );
                 bail!("Command failed: {}", cmd);
             }
         }
@@ -733,11 +808,11 @@ async fn run_command(cmd: &str) -> Result<bool> {
     } else {
         cmd.to_string()
     };
-    
+
     // Print command output separator
     println!("\n┌─ COMMAND OUTPUT: {}", cmd);
     println!("│");
-    
+
     let mut child = TokioCommand::new("sh")
         .arg("-c")
         .arg(&modified_cmd)
@@ -776,12 +851,16 @@ async fn run_command(cmd: &str) -> Result<bool> {
         }
     });
 
-    let status = child.wait().await
+    let status = child
+        .wait()
+        .await
         .map_err(|e| anyhow!("Failed to wait for command completion: {}", e))?;
 
-    stdout_handle.await
+    stdout_handle
+        .await
         .map_err(|e| anyhow!("Failed to read command output: {}", e))?;
-    stderr_handle.await
+    stderr_handle
+        .await
         .map_err(|e| anyhow!("Failed to read command errors: {}", e))?;
 
     // Print closing separator
@@ -802,40 +881,34 @@ async fn run_command(cmd: &str) -> Result<bool> {
 }
 
 async fn handle_config_direct(args: &Cli, config: &mut Config) -> Result<()> {
-    use std::fs;
-    use serde_json;
-    
-    let config_path = Config::config_path()?;
-    
-    // Load existing config to preserve values not being updated
-    let mut existing_config = if config_path.exists() {
+    let mut existing_config = if Config::config_path()?.exists() {
         Config::load()?
     } else {
         config.clone()
     };
-    
+
     if let Some(ref api_key) = args.api_key {
-        existing_config.api_key = api_key.clone();
+        existing_config.llm.api_key = api_key.clone();
     }
-    
+
     if let Some(timeout) = args.timeout {
-        existing_config.timeout_secs = timeout;
+        existing_config.llm.timeout_secs = timeout;
     }
-    
+
     if let Some(max_tokens) = args.max_tokens {
-        existing_config.max_tokens = max_tokens;
+        existing_config.models.max_tokens = max_tokens;
     }
-    
+
     if let Some(ref classifier_model) = args.classifier_model {
-        existing_config.classifier_model = classifier_model.clone();
+        existing_config.models.classifier = classifier_model.clone();
     }
-    
+
     let mut planner_model_context_tokens: Option<u32> = None;
 
     if let Some(ref planner_model) = args.planner_model {
-        existing_config.planner_model = planner_model.clone();
+        existing_config.models.planner = planner_model.clone();
         if args.max_tokens.is_none() {
-            if let Ok(models) = fetch_openrouter_free_models(&existing_config.api_key).await {
+            if let Ok(models) = fetch_openrouter_free_models(&existing_config.llm.api_key).await {
                 if let Some(selected) = models.into_iter().find(|m| m.id == *planner_model) {
                     planner_model_context_tokens = Some(derive_max_tokens(selected.context_length));
                 }
@@ -844,62 +917,60 @@ async fn handle_config_direct(args: &Cli, config: &mut Config) -> Result<()> {
     }
 
     if let Some(adjusted) = planner_model_context_tokens {
-        existing_config.max_tokens = adjusted;
+        existing_config.models.max_tokens = adjusted;
     }
-    
-    // Create config directory if it doesn't exist
-    if let Some(parent) = config_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    
-    // Save config
-    let config_json = serde_json::json!({
-        "openrouter_api_key": existing_config.api_key,
-        "timeout_secs": existing_config.timeout_secs,
-        "max_tokens": existing_config.max_tokens,
-        "classifier_model": existing_config.classifier_model,
-        "planner_model": existing_config.planner_model,
-    });
-    
-    fs::write(&config_path, serde_json::to_string_pretty(&config_json)?)?;
-    
-    println!("✅ Configuration saved to {}", config_path.display());
+
+    existing_config.save()?;
+    *config = existing_config.clone();
+
+    let truncated_key = if existing_config.llm.api_key.len() > 8 {
+        format!("{}***", &existing_config.llm.api_key[..8])
+    } else {
+        format!("{}***", existing_config.llm.api_key)
+    };
+
+    println!(
+        "✅ Configuration saved to {}",
+        Config::config_path()?.display()
+    );
     println!("📋 Current configuration:");
-    println!("   Provider: OpenRouter");
-    println!("   API Key: {}***", &existing_config.api_key[..existing_config.api_key.len().min(8)]);
-    println!("   Timeout: {}s", existing_config.timeout_secs);
-    println!("   Max Tokens: {}", existing_config.max_tokens);
-    println!("   Classifier Model: {}", existing_config.classifier_model);
-    println!("   Planner Model: {}", existing_config.planner_model);
-    
+    println!("   Provider: {}", existing_config.llm.provider);
+    println!("   API Key: {}", truncated_key);
+    println!("   Timeout: {}s", existing_config.llm.timeout_secs);
+    println!("   Max Tokens: {}", existing_config.models.max_tokens);
+    println!("   Classifier Model: {}", existing_config.models.classifier);
+    println!("   Planner Model: {}", existing_config.models.planner);
+
     Ok(())
 }
 
 async fn handle_setup() -> Result<()> {
     println!("🚀 Welcome to li CLI Setup!");
     println!("Let's configure your OpenRouter integration.\n");
-    
+
     // Get API key
     let api_key = loop {
         print!("🔑 Enter your OpenRouter API key: ");
         io::stdout().flush()?;
-        
+
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
         let key = input.trim();
-        
+
         if key.is_empty() {
             println!("❌ API key cannot be empty. Please try again.");
             continue;
         }
-        
+
         if key.starts_with("sk-or-v1") {
             break key.to_string();
         } else {
-            println!("⚠️  OpenRouter API keys typically start with 'sk-or-v1'. Are you sure this is correct?");
+            println!(
+                "⚠️  OpenRouter API keys typically start with 'sk-or-v1'. Are you sure this is correct?"
+            );
             print!("Continue anyway? [y/N]: ");
             io::stdout().flush()?;
-            
+
             let mut confirm = String::new();
             io::stdin().read_line(&mut confirm)?;
             if confirm.trim().to_lowercase() == "y" {
@@ -907,52 +978,55 @@ async fn handle_setup() -> Result<()> {
             }
         }
     };
-    
+
     // Get timeout
     let timeout = loop {
         print!("⏱️  Enter timeout in seconds (default: 30): ");
         io::stdout().flush()?;
-        
+
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
         let timeout_str = input.trim();
-        
+
         if timeout_str.is_empty() {
             break 30u64;
         }
-        
+
         match timeout_str.parse::<u64>() {
             Ok(timeout) if timeout > 0 => break timeout,
             Ok(_) => println!("❌ Timeout must be a positive number."),
             Err(_) => println!("❌ Please enter a valid number."),
         }
     };
-    
+
     println!("\n📡 Fetching available free models from OpenRouter...");
     let models = fetch_openrouter_free_models(&api_key).await?;
-    
+
     println!("\n🤖 Available Free Models:\n");
     for (idx, model) in models.iter().enumerate() {
-        let context_len = model.context_length
+        let context_len = model
+            .context_length
             .map(|len| format!(" ({} context)", len))
             .unwrap_or_default();
         println!("  {}. {}{}", idx + 1, model.name, context_len);
     }
-    
+
     // Get classifier model
     let classifier_index = loop {
-        print!("\n🧠 Select classifier model (determines if input is a command or needs planning): ");
+        print!(
+            "\n🧠 Select classifier model (determines if input is a command or needs planning): "
+        );
         io::stdout().flush()?;
-        
+
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
         let choice = input.trim();
-        
+
         if choice.is_empty() {
             println!("❌ Please select a model number.");
             continue;
         }
-        
+
         match choice.parse::<usize>() {
             Ok(num) if num >= 1 && num <= models.len() => {
                 break num - 1;
@@ -967,16 +1041,16 @@ async fn handle_setup() -> Result<()> {
     let planner_index = loop {
         print!("\n📋 Select planner model (creates shell commands from natural language): ");
         io::stdout().flush()?;
-        
+
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
         let choice = input.trim();
-        
+
         if choice.is_empty() {
             println!("❌ Please select a model number.");
             continue;
         }
-        
+
         match choice.parse::<usize>() {
             Ok(num) if num >= 1 && num <= models.len() => {
                 break num - 1;
@@ -989,71 +1063,64 @@ async fn handle_setup() -> Result<()> {
     let planner_model = planner_selection.id.clone();
     let derived_max_tokens = derive_max_tokens(planner_selection.context_length);
 
-    // Create config
-    let config = Config {
-        api_key,
-        timeout_secs: timeout,
-        max_tokens: derived_max_tokens,
-        classifier_model: classifier_model.clone(),
-        planner_model: planner_model.clone(),
-    };
-    
-    // Save config
-    let config_path = Config::config_path()?;
-    if let Some(parent) = config_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    
-    let config_json = serde_json::json!({
-        "openrouter_api_key": config.api_key,
-        "timeout_secs": config.timeout_secs,
-        "max_tokens": config.max_tokens,
-        "classifier_model": config.classifier_model,
-        "planner_model": config.planner_model,
-    });
-    
-    fs::write(&config_path, serde_json::to_string_pretty(&config_json)?)?;
-    
-    println!("\n✅ Configuration saved to {}", config_path.display());
+    let config = Config::builder()
+        .with_llm(|llm| {
+            llm.api_key = api_key.clone();
+            llm.timeout_secs = timeout;
+        })
+        .with_models(|models| {
+            models.classifier = classifier_model.clone();
+            models.planner = planner_model.clone();
+            models.max_tokens = derived_max_tokens;
+        })
+        .build()?;
+
+    config.validate()?;
+    config.save()?;
+
+    println!(
+        "\n✅ Configuration saved to {}",
+        Config::config_path()?.display()
+    );
     println!("📋 Your configuration:");
-    println!("   Provider: OpenRouter");
-    println!("   API Key: {}***", &config.api_key[..config.api_key.len().min(8)]);
-    println!("   Timeout: {}s", config.timeout_secs);
-    println!("   Max Tokens: {}", config.max_tokens);
-    println!("   Classifier Model: {}", config.classifier_model);
-    println!("   Planner Model: {}", config.planner_model);
+    println!(
+        "   API Key: {}***",
+        &config.llm.api_key[..config.llm.api_key.len().min(8)]
+    );
+    println!("   Timeout: {}s", config.llm.timeout_secs);
+    println!("   Max Tokens: {}", config.models.max_tokens);
+    println!("   Classifier Model: {}", config.models.classifier);
+    println!("   Planner Model: {}", config.models.planner);
     println!("\n🎉 Setup complete! You can now use 'li' with commands like:");
     println!("   li 'list all files in current directory'");
     println!("   li --chat 'what is the capital of France?'");
     println!("   li -m list  # to see available models\n");
-    
+
     Ok(())
 }
 
 async fn handle_chat_direct(prompt: &str, config: &Config) -> Result<()> {
-    let client = AIClient::new(config)?;
-    
+    let client = AIClient::new(&config.llm)?;
+
     let request = ChatCompletionRequest {
-        model: config.planner_model.clone(),
-        messages: vec![
-            ChatMessage {
-                role: ChatMessageRole::User,
-                content: prompt.to_string(),
-            },
-        ],
-        max_tokens: Some(config.max_tokens),
+        model: config.models.planner.clone(),
+        messages: vec![ChatMessage {
+            role: ChatMessageRole::User,
+            content: prompt.to_string(),
+        }],
+        max_tokens: Some(config.models.max_tokens),
         temperature: Some(0.7),
     };
-    
+
     let response = client
         .chat_completion(request)
         .await
         .context("Chat completion failed")?;
-    
+
     println!("Provider: OpenRouter");
-    println!("Model: {}", config.planner_model);
+    println!("Model: {}", config.models.planner);
     println!();
-    
+
     for (i, choice) in response.choices.iter().enumerate() {
         println!("Choice {}:", i + 1);
         println!("{}", choice.message.content);
@@ -1073,7 +1140,7 @@ async fn explain_plan_output(
     output: &str,
 ) -> Result<()> {
     use crate::tokens::compute_completion_token_budget;
-    
+
     println!("\n🤖 AI Intelligence Explanation:");
     println!();
 
@@ -1106,9 +1173,7 @@ async fn explain_plan_output(
         4. Whether the plan achieved its intended goal\n\
         5. Any follow-up actions the user might need to take\n\n\
         Keep the explanation conversational and easy to understand.",
-        commands_summary,
-        plan.notes,
-        output
+        commands_summary, plan.notes, output
     );
 
     let messages = vec![ChatMessage {
@@ -1116,10 +1181,10 @@ async fn explain_plan_output(
         content: explanation_prompt,
     }];
 
-    let completion_budget = compute_completion_token_budget(config.max_tokens, &messages);
+    let completion_budget = compute_completion_token_budget(config.models.max_tokens, &messages);
 
     let request = ChatCompletionRequest {
-        model: config.planner_model.clone(),
+        model: config.models.planner.clone(),
         messages,
         max_tokens: Some(completion_budget),
         temperature: Some(0.7),
@@ -1164,8 +1229,8 @@ async fn handle_intelligence(
         if potential_question.is_empty() {
             task.join(" ").trim().to_owned()
         } else {
-            let looks_like_question = potential_question.ends_with('?')
-                || potential_question.contains('?');
+            let looks_like_question =
+                potential_question.ends_with('?') || potential_question.contains('?');
             let command_has_whitespace = potential_command.contains(char::is_whitespace);
             let command_starts_with_flag = potential_command.starts_with('-');
 
@@ -1212,7 +1277,11 @@ async fn handle_intelligence(
     println!();
 
     // Prepare the explanation prompt
-    let base_output = if stdout.trim().is_empty() { &stderr } else { &stdout };
+    let base_output = if stdout.trim().is_empty() {
+        &stderr
+    } else {
+        &stdout
+    };
     let explanation_prompt = if let Some(question) = question {
         format!(
             "A user asked the following question about a command they ran:\n\
@@ -1221,9 +1290,7 @@ async fn handle_intelligence(
             Output:\n{}\n\
             Please answer the question directly, referencing the command output.\n\
             Include any helpful context, summaries, and actionable insights the user should know.",
-            question,
-            command_str,
-            base_output
+            question, command_str, base_output
         )
     } else {
         format!(
@@ -1236,23 +1303,22 @@ async fn handle_intelligence(
             3. Any warnings or things to pay attention to\n\
             4. What a user should understand from this result\n\
             Keep the explanation conversational and easy to understand for someone who might not be familiar with this command.",
-            command_str,
-            base_output
+            command_str, base_output
         )
     };
 
     println!("🤖 AI Explanation:");
     println!();
 
-    let client = AIClient::new(config)?;
+    let client = AIClient::new(&config.llm)?;
 
     let request = ChatCompletionRequest {
-        model: config.planner_model.clone(),
+        model: config.models.planner.clone(),
         messages: vec![ChatMessage {
             role: ChatMessageRole::User,
             content: explanation_prompt,
         }],
-        max_tokens: Some(config.max_tokens),
+        max_tokens: Some(config.models.max_tokens),
         temperature: Some(0.7),
     };
 

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
 
-use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole};
+use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole, LlmClient};
 use crate::tokens::compute_completion_token_budget;
 
 const PLANNER_SYSTEM_PROMPT: &str = r#"You are a STRICT JSON planner that converts a natural-language goal into a safe, minimal shell plan.
@@ -94,7 +94,7 @@ enum PlannerResponse {
 fn extract_json_object(input: &str) -> Option<String> {
     // Strip out ALL <think>...</think> blocks (there may be multiple or nested)
     let mut cleaned = input.to_string();
-    
+
     // Keep removing think blocks until none are left
     loop {
         if let Some(think_start) = cleaned.find("<think>") {
@@ -110,11 +110,11 @@ fn extract_json_object(input: &str) -> Option<String> {
             break;
         }
     }
-    
+
     // Now find the FIRST complete JSON object only
     let trimmed = cleaned.trim();
     let start = trimmed.find('{')?;
-    
+
     // Find the matching closing brace by counting depth
     let mut depth = 0;
     let mut end = None;
@@ -131,7 +131,7 @@ fn extract_json_object(input: &str) -> Option<String> {
             _ => {}
         }
     }
-    
+
     let end = end?;
     Some(trimmed[start..=end].to_string())
 }
@@ -143,15 +143,21 @@ pub async fn interactive_plan(
     max_tokens: u32,
 ) -> Result<Plan> {
     use std::io::{self, Write};
-    
+
     let mut context = initial_request.to_string();
     let mut conversation: Vec<(String, String)> = vec![];
-    
+
     loop {
-        let response = call_planner_with_context(client, &context, &conversation, model, max_tokens).await?;
-        
+        let response =
+            call_planner_with_context(client, &context, &conversation, model, max_tokens).await?;
+
         match response {
-            PlannerResponse::Plan { confidence, dry_run_commands, execute_commands, notes } => {
+            PlannerResponse::Plan {
+                confidence,
+                dry_run_commands,
+                execute_commands,
+                notes,
+            } => {
                 return Ok(Plan {
                     confidence,
                     dry_run_commands,
@@ -163,24 +169,32 @@ pub async fn interactive_plan(
                 println!("\n🤔 Planner asks: {}", text);
                 print!("Your answer (or 'skip' to cancel): ");
                 io::stdout().flush()?;
-                
+
                 let mut answer = String::new();
                 io::stdin().read_line(&mut answer)?;
                 answer = answer.trim().to_string();
-                
+
                 if answer.to_lowercase() == "skip" {
                     return Err(anyhow!("Planning cancelled by user"));
                 }
-                
+
                 // Add Q&A to conversation context
                 conversation.push(("question".to_string(), text));
                 conversation.push(("answer".to_string(), answer.clone()));
-                
+
                 // Update context with new information
-                context = format!("{}\n\nPrevious Q&A:\n{}\nUser answered: {}", 
-                    ctx, 
-                    conversation.iter().rev().take(2).map(|(k,v)| format!("{}: {}", k, v)).collect::<Vec<_>>().join("\n"),
-                    answer);
+                context = format!(
+                    "{}\n\nPrevious Q&A:\n{}\nUser answered: {}",
+                    ctx,
+                    conversation
+                        .iter()
+                        .rev()
+                        .take(2)
+                        .map(|(k, v)| format!("{}: {}", k, v))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    answer
+                );
             }
         }
     }
@@ -193,13 +207,11 @@ async fn call_planner_with_context(
     model: &str,
     max_tokens: u32,
 ) -> Result<PlannerResponse> {
-    let mut messages = vec![
-        ChatMessage {
-            role: ChatMessageRole::System,
-            content: PLANNER_SYSTEM_PROMPT.to_string(),
-        },
-    ];
-    
+    let mut messages = vec![ChatMessage {
+        role: ChatMessageRole::System,
+        content: PLANNER_SYSTEM_PROMPT.to_string(),
+    }];
+
     // Add conversation history if any
     for (role, content) in conversation {
         let message_role = if role == "question" {
@@ -212,7 +224,7 @@ async fn call_planner_with_context(
             content: content.clone(),
         });
     }
-    
+
     // Add current request
     messages.push(ChatMessage {
         role: ChatMessageRole::User,
@@ -253,12 +265,7 @@ async fn call_planner_with_context(
     Ok(response)
 }
 
-pub async fn plan(
-    client: &AIClient,
-    request: &str,
-    model: &str,
-    max_tokens: u32,
-) -> Result<Plan> {
+pub async fn plan(client: &AIClient, request: &str, model: &str, max_tokens: u32) -> Result<Plan> {
     interactive_plan(client, request, model, max_tokens).await
 }
 
@@ -268,19 +275,42 @@ mod tests {
     use httpmock::prelude::*;
     use serde_json::json;
 
-    use crate::config::Config;
+    use crate::{
+        config::{Config, LlmProvider, LlmSettings, ModelSettings, RecoverySettings},
+        tokens::compute_completion_token_budget,
+    };
 
     fn sample_config() -> Config {
         Config {
-            api_key: "test-key".to_string(),
-            timeout_secs: 30,
-            max_tokens: 512,
-            classifier_model: "nvidia/nemotron-nano-12b-v2-vl:free".to_string(),
-            planner_model: "minimax/minimax-m2:free".to_string(),
+            llm: LlmSettings {
+                provider: LlmProvider::OpenRouter,
+                api_key: "test-key".to_string(),
+                timeout_secs: 30,
+                base_url: "https://openrouter.ai/api/v1".to_string(),
+                user_agent: "li/test".to_string(),
+            },
+            models: ModelSettings {
+                classifier: "nvidia/nemotron-nano-12b-v2-vl:free".to_string(),
+                planner: "minimax/minimax-m2:free".to_string(),
+                max_tokens: 512,
+            },
+            recovery: RecoverySettings::default(),
         }
     }
 
     fn expected_request_body(user_input: &str) -> serde_json::Value {
+        let messages = vec![
+            ChatMessage {
+                role: ChatMessageRole::System,
+                content: PLANNER_SYSTEM_PROMPT.to_string(),
+            },
+            ChatMessage {
+                role: ChatMessageRole::User,
+                content: user_input.to_string(),
+            },
+        ];
+        let max_tokens = compute_completion_token_budget(512, &messages);
+
         json!({
             "model": "minimax/minimax-m2:free",
             "messages": [
@@ -293,7 +323,7 @@ mod tests {
                     "content": user_input
                 }
             ],
-            "max_tokens": 512,
+            "max_tokens": max_tokens,
             "temperature": 0.0
         })
     }
@@ -324,14 +354,15 @@ mod tests {
             })
             .await;
 
-        let config = sample_config();
-        let client = AIClient::new(&config).unwrap();
+        let mut config = sample_config();
+        config.llm.base_url = server.url("/v1");
+        let client = AIClient::new(&config.llm).unwrap();
 
         let plan = plan(
             &client,
             "make a new git repo",
-            &config.planner_model,
-            config.max_tokens,
+            &config.models.planner,
+            config.models.max_tokens,
         )
         .await
         .unwrap();
@@ -377,15 +408,16 @@ mod tests {
             })
             .await;
 
-        let config = sample_config();
-        let client = AIClient::new(&config).unwrap();
+        let mut config = sample_config();
+        config.llm.base_url = server.url("/v1");
+        let client = AIClient::new(&config.llm).unwrap();
 
         // This should fail because interactive planning needs user input
         let result = plan(
             &client,
             "create a remote git repo",
-            &config.planner_model,
-            config.max_tokens,
+            &config.models.planner,
+            config.models.max_tokens,
         )
         .await;
 
@@ -419,14 +451,15 @@ mod tests {
             })
             .await;
 
-        let config = sample_config();
-        let client = AIClient::new(&config).unwrap();
+        let mut config = sample_config();
+        config.llm.base_url = server.url("/v1");
+        let client = AIClient::new(&config.llm).unwrap();
 
         let err = plan(
             &client,
             "make a new git repo",
-            &config.planner_model,
-            config.max_tokens,
+            &config.models.planner,
+            config.models.max_tokens,
         )
         .await
         .unwrap_err();

@@ -1,11 +1,13 @@
-mod client;
+mod agent;
 mod classifier;
 mod cli;
+mod client;
 mod config;
-mod tokens;
 mod exec;
 mod hook;
 mod planner;
+mod tokens;
+mod validator;
 
 use anyhow::Result;
 use clap::Parser;
@@ -20,17 +22,18 @@ async fn main() -> Result<()> {
     }
 
     // Check if this is just "li" with no arguments (show welcome message)
-    let is_empty_task = cli.task.is_empty() && !cli.chat && cli.command.is_none() && cli.model.is_none();
-    
+    let is_empty_task =
+        cli.task.is_empty() && !cli.chat && cli.command.is_none() && cli.model.is_none();
+
     if is_empty_task {
         // Run with a dummy config that will trigger the welcome message
-        let dummy_config = config::Config {
-            api_key: "".to_string(),
-            timeout_secs: 30,
-            max_tokens: 2048,
-            classifier_model: "".to_string(),
-            planner_model: "".to_string(),
-        };
+        let dummy_config = config::Config::builder()
+            .with_models(|models| {
+                models.classifier.clear();
+                models.planner.clear();
+            })
+            .build()
+            .unwrap();
         return cli.run(dummy_config).await;
     }
 
