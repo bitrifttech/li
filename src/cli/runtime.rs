@@ -1,6 +1,4 @@
-use crate::agent::{
-    AgentEvent, AgentOrchestrator, AgentOutcome, AgentRequest, AgentRun, StageKind,
-};
+use crate::agent::{AgentOrchestrator, AgentOutcome, AgentRequest, StageKind};
 use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole, LlmClient};
 use crate::config::{Config, DEFAULT_MAX_TOKENS};
 use crate::exec;
@@ -11,6 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
 use serde::Deserialize;
 use std::io::{self, Write};
+use std::process;
 
 const CONTEXT_HEADROOM_TOKENS: usize = 1024;
 
@@ -508,6 +507,21 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
         return Ok(());
     }
 
+    if classify {
+        let client = AIClient::new(&config.llm)?;
+        let classification =
+            classifier::classify(&client, &prompt, &config.models.classifier).await?;
+
+        println!("Provider: {}", config.llm.provider);
+        println!("Classifier Model: {}", config.models.classifier);
+        println!("Classification: {}", classification_label(classification));
+
+        match classification {
+            classifier::Classification::NaturalLanguage => return Ok(()),
+            classifier::Classification::Terminal => process::exit(100),
+        }
+    }
+
     let orchestrator = AgentOrchestrator::default();
     let mut request = AgentRequest::new(prompt.clone());
     request.classify = classify;
@@ -516,14 +530,6 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
         .run(config.clone(), request)
         .await
         .context("Agent pipeline failed")?;
-
-    if classify {
-        if let Some(classification) = classification_from_events(&run) {
-            println!("Provider: OpenRouter");
-            println!("Classifier Model: {}", config.models.classifier);
-            println!("Classification: {}", classification_label(classification));
-        }
-    }
 
     match run.outcome {
         AgentOutcome::DirectCommand { command } => {
@@ -598,16 +604,6 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
             bail!("Agent stage {} failed: {}. {}", stage, error, guidance);
         }
     }
-}
-
-fn classification_from_events(run: &AgentRun) -> Option<classifier::Classification> {
-    run.events.iter().find_map(|event| {
-        if let AgentEvent::ClassificationReady(result) = event {
-            Some(*result)
-        } else {
-            None
-        }
-    })
 }
 
 fn classification_label(classification: classifier::Classification) -> &'static str {

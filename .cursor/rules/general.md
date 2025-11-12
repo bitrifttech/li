@@ -1,0 +1,2 @@
+# General Rules
+- When planning delegate smaller tasks to the cline agent instead of doing them yourself. Make sure to give the agent the necessary information to understand the task so that cline can complete the task successfully. Run the cline agent via `cline` command on the command line.
