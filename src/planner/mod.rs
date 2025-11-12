@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
+use std::io::{self, Write};
 
-use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole, DynLlmClient};
+use crate::client::{ChatCompletionRequest, ChatMessage, ChatMessageRole, DynLlmClient};
 use crate::tokens::compute_completion_token_budget;
 
 const PLANNER_SYSTEM_PROMPT: &str = r#"You are a STRICT JSON planner that converts a natural-language goal into a safe, minimal shell plan.
@@ -91,6 +92,21 @@ enum PlannerResponse {
     },
 }
 
+type QuestionResolver = dyn Fn(&str, &str) -> Result<String> + Send + Sync;
+
+fn default_question_resolver(question: &str, context: &str) -> Result<String> {
+    println!("\n🤔 Planner asks: {}", question);
+    if !context.trim().is_empty() {
+        println!("Context: {}", context);
+    }
+    print!("Your answer (or 'skip' to cancel): ");
+    io::stdout().flush()?;
+
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    Ok(answer.trim().to_string())
+}
+
 fn extract_json_object(input: &str) -> Option<String> {
     // Strip out ALL <think>...</think> blocks (there may be multiple or nested)
     let mut cleaned = input.to_string();
@@ -136,14 +152,13 @@ fn extract_json_object(input: &str) -> Option<String> {
     Some(trimmed[start..=end].to_string())
 }
 
-pub async fn interactive_plan(
+async fn interactive_plan_with_resolver(
     client: &DynLlmClient,
     initial_request: &str,
     model: &str,
     max_tokens: u32,
+    resolver: &QuestionResolver,
 ) -> Result<Plan> {
-    use std::io::{self, Write};
-
     let mut context = initial_request.to_string();
     let mut conversation: Vec<(String, String)> = vec![];
 
@@ -166,23 +181,14 @@ pub async fn interactive_plan(
                 });
             }
             PlannerResponse::Question { text, context: ctx } => {
-                println!("\n🤔 Planner asks: {}", text);
-                print!("Your answer (or 'skip' to cancel): ");
-                io::stdout().flush()?;
-
-                let mut answer = String::new();
-                io::stdin().read_line(&mut answer)?;
-                answer = answer.trim().to_string();
-
-                if answer.to_lowercase() == "skip" {
+                let answer = resolver(&text, &ctx)?;
+                if answer.trim().eq_ignore_ascii_case("skip") {
                     return Err(anyhow!("Planning cancelled by user"));
                 }
 
-                // Add Q&A to conversation context
                 conversation.push(("question".to_string(), text));
                 conversation.push(("answer".to_string(), answer.clone()));
 
-                // Update context with new information
                 context = format!(
                     "{}\n\nPrevious Q&A:\n{}\nUser answered: {}",
                     ctx,
@@ -198,6 +204,22 @@ pub async fn interactive_plan(
             }
         }
     }
+}
+
+pub async fn interactive_plan(
+    client: &DynLlmClient,
+    initial_request: &str,
+    model: &str,
+    max_tokens: u32,
+) -> Result<Plan> {
+    interactive_plan_with_resolver(
+        client,
+        initial_request,
+        model,
+        max_tokens,
+        &default_question_resolver,
+    )
+    .await
 }
 
 async fn call_planner_with_context(
@@ -275,12 +297,24 @@ pub async fn plan(
 }
 
 #[cfg(test)]
+async fn plan_with_resolver(
+    client: &DynLlmClient,
+    request: &str,
+    model: &str,
+    max_tokens: u32,
+    resolver: &QuestionResolver,
+) -> Result<Plan> {
+    interactive_plan_with_resolver(client, request, model, max_tokens, resolver).await
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use httpmock::prelude::*;
     use serde_json::json;
 
     use crate::{
+        client::AIClient,
         config::{Config, LlmProvider, LlmSettings, ModelSettings, RecoverySettings},
         tokens::compute_completion_token_budget,
     };
@@ -417,17 +451,27 @@ mod tests {
         config.llm.base_url = server.url("/v1");
         let client = AIClient::new(&config.llm).unwrap();
 
-        // This should fail because interactive planning needs user input
-        let result = plan(
+        let resolver = |question: &str, _context: &str| {
+            assert_eq!(
+                question,
+                "What server should I use for the remote repository?"
+            );
+            Ok("skip".to_string())
+        };
+
+        let result = plan_with_resolver(
             &client,
             "create a remote git repo",
             &config.models.planner,
             config.models.max_tokens,
+            &resolver,
         )
         .await;
 
-        // Should fail due to stdin not being available in test
         assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Planning cancelled by user"));
+
         _mock.assert_async().await;
     }
 
