@@ -6,32 +6,50 @@ on:
       - 'v*'
 
 jobs:
-  create-release:
-    runs-on: ubuntu-latest
+  build-macos:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        
+
       - name: Build release binary
-        run: cargo build --release --target x86_64-apple-darwin
-        
+        run: cargo build --release
+
       - name: Create release archive
         run: |
           mkdir -p release
-          cp target/x86_64-apple-darwin/release/li release/
-          tar -czf li-x86_64-apple-darwin.tar.gz -C release li
-          
+          cp target/release/li release/
+          tar -czf li-macos-universal.tar.gz -C release li
+
       - name: Generate SHA256
-        run: sha256sum li-x86_64-apple-darwin.tar.gz > li-x86_64-apple-darwin.tar.gz.sha256
-        id: sha256
-        
-      - name: Create Release
+        run: shasum -a 256 li-macos-universal.tar.gz > li-macos-universal.tar.gz.sha256
+
+      - name: Upload Release Asset
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            li-x86_64-apple-darwin.tar.gz
-            li-x86_64-apple-darwin.tar.gz.sha256
+            li-macos-universal.tar.gz
+            li-macos-universal.tar.gz.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-homebrew:
+    needs: build-macos
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: bitrifttech/li-homebrew
+          token: ${{ secrets.TAP_PUSH_TOKEN }}
+          ref: main
+
+      - name: Update Homebrew formula
+        run: |
+          ./update-sha.sh "${{ github.ref_name }}"
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add li.rb
+          git commit -m "li: update to ${{ github.ref_name }}" || echo "No changes"
+          git push
