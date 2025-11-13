@@ -10,7 +10,7 @@ use crate::validator::ValidationResult;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
 use serde::Deserialize;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::str::FromStr;
 
 const CONTEXT_HEADROOM_TOKENS: usize = 1024;
@@ -200,6 +200,23 @@ fn mask_api_key(key: &str) -> String {
     format!("{}***", &key[..visible])
 }
 
+fn read_piped_stdin() -> Result<Option<String>> {
+    if io::stdin().is_terminal() {
+        return Ok(None);
+    }
+
+    let mut buffer = String::new();
+    io::stdin()
+        .read_to_string(&mut buffer)
+        .context("Failed to read piped input from stdin")?;
+
+    if buffer.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(buffer))
+    }
+}
+
 fn prompt_model_index(models: &[OpenRouterModel], label: &str) -> Result<usize> {
     loop {
         print!("{label}");
@@ -370,8 +387,8 @@ pub struct Cli {
     #[arg(short = 'i', long = "intelligence")]
     pub intelligence: bool,
 
-    /// Ask a specific question about the command output when using intelligence mode
-    #[arg(short = 'q', long = "question", requires = "intelligence")]
+    /// Ask a specific question about the command output (implies intelligence mode)
+    #[arg(short = 'q', long = "question")]
     pub question: Option<String>,
 
     /// Configure li settings
@@ -432,12 +449,14 @@ impl Cli {
 
     pub async fn run(self, mut config: Config) -> Result<()> {
         set_verbose_logging(self.verbose);
+        let piped_input = read_piped_stdin()?;
+        let use_intelligence = self.intelligence || self.question.is_some();
         // Check for empty task (show welcome message)
         let prompt = self.task.join(" ").trim().to_owned();
         if prompt.is_empty()
             && !self.setup
             && !self.chat
-            && !self.intelligence
+            && !use_intelligence
             && !self.config
             && self.command.is_none()
             && self.model.is_none()
@@ -544,6 +563,17 @@ impl Cli {
                 bail!("Chat message cannot be empty. Usage: li --chat \"your message\"");
             }
             return handle_chat_direct(&prompt, &config).await;
+        }
+
+        if use_intelligence {
+            handle_intelligence(
+                self.question.clone(),
+                self.task.clone(),
+                piped_input,
+                &config,
+            )
+            .await?;
+            return Ok(());
         }
 
         // Handle provider override
@@ -721,12 +751,6 @@ impl Cli {
                 }
                 config.models.planner = model_arg.clone();
             }
-        }
-
-        // Handle intelligence flag
-        if self.intelligence {
-            handle_intelligence(self.question.clone(), self.task, &config).await?;
-            return Ok(());
         }
 
         // Handle config flags
@@ -1252,20 +1276,19 @@ async fn explain_plan_output(
 async fn handle_intelligence(
     question_flag: Option<String>,
     task: Vec<String>,
+    piped_input: Option<String>,
     config: &Config,
 ) -> Result<()> {
     use std::process::Command;
-
-    if task.is_empty() {
-        bail!("Intelligence mode requires a command to execute and explain");
-    }
 
     // Determine question and command inputs
     let mut question = question_flag
         .map(|q| q.trim().to_owned())
         .filter(|q| !q.is_empty());
 
-    let command_str = if question.is_some() || task.len() == 1 {
+    let command_candidate = if task.is_empty() {
+        String::new()
+    } else if question.is_some() || task.len() == 1 {
         task.join(" ").trim().to_owned()
     } else {
         let potential_command = task.last().unwrap().trim().to_owned();
@@ -1290,25 +1313,57 @@ async fn handle_intelligence(
         }
     };
 
-    if command_str.is_empty() {
-        bail!("Intelligence mode requires a command to execute and explain");
+    let mut piped_input = piped_input;
+    let piped_was_present = piped_input.is_some();
+    if let Some(ref data) = piped_input {
+        if data.trim().is_empty() {
+            piped_input = None;
+        }
+    }
+
+    if piped_input.is_none() && command_candidate.is_empty() {
+        if piped_was_present {
+            bail!(
+                "Piped input was empty. Provide command output to analyze or specify a command to run."
+            );
+        } else {
+            bail!("Intelligence mode requires a command to execute and explain");
+        }
     }
 
     println!("🧠 AI Intelligence Mode");
-    println!("🔧 Executing: {}", command_str);
-    println!();
 
-    // Execute the command and capture output
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(&command_str)
-        .output()
-        .context("Failed to execute command")?;
+    let command_display = if !command_candidate.is_empty() {
+        command_candidate.clone()
+    } else {
+        "stdin (piped input)".to_string()
+    };
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let (stdout, stderr) = if let Some(piped) = piped_input {
+        if task.is_empty() {
+            println!("🔧 Analyzing piped input from stdin");
+        } else {
+            println!("🔧 Analyzing piped input for '{}'", command_display);
+        }
+        println!();
 
-    // Show the raw output
+        (piped, String::new())
+    } else {
+        println!("🔧 Executing: {}", command_display);
+        println!();
+
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(&command_candidate)
+            .output()
+            .context("Failed to execute command")?;
+
+        (
+            String::from_utf8_lossy(&output.stdout).to_string(),
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        )
+    };
+
     if !stdout.trim().is_empty() {
         println!("📤 Command Output:");
         println!("{}", stdout);
@@ -1321,12 +1376,16 @@ async fn handle_intelligence(
 
     println!();
 
-    // Prepare the explanation prompt
     let base_output = if stdout.trim().is_empty() {
         &stderr
     } else {
         &stdout
     };
+
+    if base_output.trim().is_empty() {
+        bail!("No output available for intelligence analysis");
+    }
+
     let explanation_prompt = if let Some(question) = question {
         format!(
             "A user asked the following question about a command they ran:\n\
@@ -1335,7 +1394,7 @@ async fn handle_intelligence(
             Output:\n{}\n\
             Please answer the question directly, referencing the command output.\n\
             Include any helpful context, summaries, and actionable insights the user should know.",
-            question, command_str, base_output
+            question, command_display, base_output
         )
     } else {
         format!(
@@ -1348,7 +1407,7 @@ async fn handle_intelligence(
             3. Any warnings or things to pay attention to\n\
             4. What a user should understand from this result\n\
             Keep the explanation conversational and easy to understand for someone who might not be familiar with this command.",
-            command_str, base_output
+            command_display, base_output
         )
     };
 

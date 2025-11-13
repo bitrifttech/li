@@ -21,8 +21,12 @@ async fn main() -> Result<()> {
     }
 
     // Check if this is just "li" with no arguments (show welcome message)
-    let is_empty_task =
-        cli.task.is_empty() && !cli.chat && cli.command.is_none() && cli.model.is_none();
+    let is_empty_task = cli.task.is_empty()
+        && !cli.chat
+        && cli.command.is_none()
+        && cli.model.is_none()
+        && !cli.intelligence
+        && cli.question.is_none();
 
     if is_empty_task {
         // Run with a dummy config that will trigger the welcome message

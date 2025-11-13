@@ -89,6 +89,8 @@ li --intelligence 'ps aux'                       # Understand running processes
 li -i 'mount'                                    # Learn about mounted filesystems
 li -i --question 'Which disk has most space?' "df -h"  # Ask a specific question
 li -i 'ls -la'                                   # Understand file permissions
+df | li -i                                       # Analyze piped command output
+df | li -q 'Which disk has the most space?'      # Ask questions about piped output
 
 # Interactive model selection
 li --model
@@ -152,14 +154,16 @@ li 'run all tests'
 
 ## 🧠 AI Intelligence Mode
 
-The **intelligence mode** (`-i` or `--intelligence`) helps you understand command outputs by running a command and then using AI to explain what the output means in human-friendly terms.
+The **intelligence mode** (`-i` or `--intelligence`) helps you understand command outputs by running a command and then using AI to explain what the output means in human-friendly terms. You can also pipe existing command output into `li` for analysis without re-running the original command.
 
 ### How It Works
 
-1. **Execute Command**: li runs your specified shell command
+1. **Execute or Receive Output**: li runs your specified shell command, or consumes piped stdin if provided
 2. **Capture Output**: Both stdout and stderr are collected
 3. **AI Explanation**: The output is sent to the AI model for analysis
 4. **Human-Friendly Breakdown**: Get explanations, insights, and warnings
+
+> Tip: Passing `--question` automatically enables intelligence mode, even if you omit `-i`.
 
 ### Examples
 
@@ -169,11 +173,13 @@ The **intelligence mode** (`-i` or `--intelligence`) helps you understand comman
 li -i "df -h"
 li -i --question "Which disk has most free space?" "df -h"
 
-# Learn about mounted filesystems
-li --intelligence "mount"
+df | li -i
+```
 
-# Analyze running processes
-li -i "ps aux | head -20"
+#### Ask Questions About Piped Output
+```bash
+df | li -q "Which disk has the most space?"
+log show --predicate 'process == "kernel"' | li -q "Are there any kernel panics?"
 ```
 
 #### File Operations
@@ -186,19 +192,6 @@ li --intelligence "tree -L 2"
 
 # Check file sizes
 li -i "du -sh * | sort -hr | head -10"
-```
-
-#### Network & System
-```bash
-# Network connections
-li -i "netstat -an | grep LISTEN"
-
-# System resources
-li --intelligence "top -l 1 | head -15"
-li --intelligence --question "Where is CPU usage spiking?" "top -l 1 | head -15"
-
-# Memory usage
-li -i "vm_stat"
 ```
 
 ### What You Get

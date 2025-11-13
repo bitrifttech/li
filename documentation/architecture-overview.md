@@ -358,14 +358,14 @@ flowchart TD
 - **Setup Flow**: Interactive configuration wizard for first-time users
 - **Model Selection**: Dynamic model fetching when using OpenRouter
 - **Provider Selection**: Interactive switching between OpenRouter and Cerebras
-- **Intelligence Mode**: Command output explanation with AI analysis
+- **Intelligence Mode**: Command output explanation with AI analysis (executes commands or consumes piped stdin)
 - **Direct Chat**: Bypass planning for direct AI conversation
 
 **Key Functions**:
 - [`Cli::run()`](src/cli/runtime.rs:212): Main execution dispatcher
 - [`handle_setup()`](src/cli/runtime.rs:846): Interactive configuration
 - [`handle_chat_direct()`](src/cli/runtime.rs:1001): Direct AI conversation
-- [`handle_intelligence()`](src/cli/runtime.rs:1106): Command output analysis
+- [`handle_intelligence()`](src/cli/runtime.rs:1252): Command output and piped-input analysis
 
 ### 2. Agent Subsystem
 
