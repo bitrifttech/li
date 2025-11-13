@@ -42,7 +42,16 @@ li/
 │   ├── main.rs                   # Application entry point
 │   ├── cli/                      # Command-line interface handling
 │   │   ├── mod.rs               # Module exports
-│   │   └── runtime.rs           # CLI parsing and execution logic
+│   │   ├── args.rs              # CLI argument definitions
+│   │   ├── chat.rs              # Direct chat functionality
+│   │   ├── commands.rs          # Main command dispatch logic
+│   │   ├── config_cmd.rs        # Configuration command handling
+│   │   ├── intelligence.rs      # Intelligence mode for command analysis
+│   │   ├── models.rs            # Model selection and management
+│   │   ├── providers.rs         # Provider selection logic
+│   │   ├── setup.rs             # Interactive setup flows
+│   │   ├── task.rs              # Task execution handling
+│   │   └── util.rs              # CLI utility functions
 │   ├── agent/                    # Core agent orchestration system
 │   │   ├── mod.rs               # Module exports and types
 │   │   ├── adapters.rs          # Adapter implementations for stages
@@ -53,15 +62,25 @@ li/
 │   │   ├── types.rs             # Core type definitions
 │   │   └── tests.rs             # Agent system tests
 │   ├── planner/                  # Command planning logic
-│   │   └── mod.rs               # Planning implementation with tests
+│   │   ├── mod.rs               # Module exports and public interface
+│   │   ├── parsing.rs           # JSON response parsing utilities
+│   │   ├── prompt.rs            # System prompts and templates
+│   │   ├── session.rs           # Planning session management
+│   │   ├── transport.rs         # HTTP transport for LLM communication
+│   │   ├── types.rs             # Plan and related type definitions
+│   │   └── tests.rs             # Planner module tests
 │   ├── validator/                # Command validation system
 │   │   ├── mod.rs               # Validation implementation
 │   │   └── tests.rs             # Validation tests
 │   ├── exec/                     # Command execution engine
 │   │   └── mod.rs               # Execution implementation
 │   ├── recovery/                 # Error recovery system
-│   │   ├── mod.rs               # Recovery implementation
-│   │   └── tests.rs             # Recovery tests
+│   │   ├── mod.rs               # Recovery module exports
+│   │   ├── ai.rs                # AI-powered recovery generation
+│   │   ├── tests.rs             # Recovery module tests
+│   │   ├── types.rs             # Recovery type definitions
+│   │   ├── ui.rs                # Recovery UI components
+│   │   └── utils.rs             # Recovery utility functions
 │   ├── client.rs                 # HTTP client for AI services
 │   ├── config.rs                 # Configuration management
 │   └── tokens.rs                 # Token handling utilities
@@ -89,29 +108,49 @@ li/
 ### Core Entry Points
 
 #### [`src/main.rs`](src/main.rs:1)
-The application entry point (52 lines) that:
+The application entry point (38 lines) that:
 - Initializes the Tokio async runtime
 - Parses CLI arguments using `clap`
 - Handles special cases (setup, empty task, welcome message)
 - Loads configuration or exits with setup instructions
-- Delegates to the CLI runtime for actual execution
+- Delegates to the CLI commands module for actual execution
 
 **Key responsibilities**: Bootstrap, configuration loading, error handling
 
 #### [`src/cli/mod.rs`](src/cli/mod.rs:1)
-Simple module export file (3 lines) that re-exports the main CLI structure.
+Simple module export file (10 lines) that re-exports the CLI argument structure and submodules.
 
-#### [`src/cli/runtime.rs`](src/cli/runtime.rs:1)
-The heart of the CLI system (1,441 lines) that:
-- Defines all CLI commands and flags using `clap` derive macros
-- Handles interactive setup flows with OpenRouter model fetching
-- Manages model selection and configuration with interactive prompts
-- Implements the main task execution pipeline
-- Provides intelligent mode for explaining command outputs
-- Handles direct chat functionality with temperature control
-- Includes comprehensive welcome message and usage examples
+#### [`src/cli/args.rs`](src/cli/args.rs:1)
+Defines the CLI argument structure using `clap` derive macros (79 lines) that:
+- Declares all CLI commands, flags, and options
+- Handles the main command structure with optional subcommands
+- Defines the `Cli` struct with all possible arguments
+- Implements entry points for setup and run operations
 
-**Key responsibilities**: CLI parsing, user interaction, orchestration
+**Key responsibilities**: CLI argument parsing, structure definition
+
+#### [`src/cli/commands.rs`](src/cli/commands.rs:1)
+The heart of the CLI system (345 lines) that:
+- Dispatches commands to appropriate handlers based on parsed arguments
+- Handles provider and model overrides
+- Manages configuration updates via command-line flags
+- Coordinates between CLI components and the core agent system
+- Displays the welcome message for empty invocations
+
+**Key responsibilities**: Command routing, orchestration, configuration management
+
+#### Other CLI Modules
+
+The CLI system has been refactored into focused modules for better maintainability:
+
+- **[`src/cli/setup.rs`](src/cli/setup.rs:1)**: Interactive setup wizard for first-time configuration
+- **[`src/cli/chat.rs`](src/cli/chat.rs:1)**: Direct chat functionality with configurable parameters
+- **[`src/cli/intelligence.rs`](src/cli/intelligence.rs:1)**: Intelligence mode for explaining command outputs
+- **[`src/cli/config_cmd.rs`](src/cli/config_cmd.rs:1)**: Configuration management via command-line flags
+- **[`src/cli/models.rs`](src/cli/models.rs:1)**: Model selection and management utilities
+- **[`src/cli/providers.rs`](src/cli/providers.rs:1)**: Provider selection and configuration
+- **[`src/cli/task.rs`](src/cli/task.rs:1)**: Task execution handling using the agent system
+- **[`src/cli/util.rs`](src/cli/util.rs:1)**: Utility functions for CLI operations
 
 ### Core Agent System
 
@@ -155,7 +194,18 @@ Stage definitions for the processing pipeline:
 ### AI Service Integration
 
 #### [`src/planner/mod.rs`](src/planner/mod.rs:1)
-Command planning system that:
+Planner module that exports the public interface for command planning (28 lines).
+
+The planner functionality has been refactored into focused modules:
+
+- **[`src/planner/session.rs`](src/planner/session.rs:1)**: Planning session management with interactive resolution
+- **[`src/planner/prompt.rs`](src/planner/prompt.rs:1)**: System prompts and templates for LLM interactions
+- **[`src/planner/transport.rs`](src/planner/transport.rs:1)**: HTTP transport layer for LLM communication
+- **[`src/planner/parsing.rs`](src/planner/parsing.rs:1)**: Robust JSON response parsing utilities
+- **[`src/planner/types.rs`](src/planner/types.rs:1)**: Plan and related type definitions
+- **[`src/planner/tests.rs`](src/planner/tests.rs:1)**: Comprehensive planner module tests
+
+The overall planner system:
 - Converts natural language into safe shell command sequences
 - Supports interactive clarification when needed
 - Handles AI model responses with robust JSON parsing
@@ -187,7 +237,17 @@ Command validation system that:
 - Provides detailed missing command information
 
 #### [`src/recovery/mod.rs`](src/recovery/mod.rs:1)
-Error recovery system that:
+Recovery module that exports the error recovery system (33 lines).
+
+The recovery functionality has been refactored into focused modules:
+
+- **[`src/recovery/ai.rs`](src/recovery/ai.rs:1)**: AI-powered recovery option generation
+- **[`src/recovery/ui.rs`](src/recovery/ui.rs:1)**: Interactive recovery UI components and menus
+- **[`src/recovery/types.rs`](src/recovery/types.rs:1)**: Recovery type definitions and result enums
+- **[`src/recovery/utils.rs`](src/recovery/utils.rs:1)**: Recovery utility functions and helpers
+- **[`src/recovery/tests.rs`](src/recovery/tests.rs:1)**: Recovery module tests
+
+The overall recovery system:
 - Generates alternative commands when tools are missing
 - Provides installation instructions for missing dependencies
 - Offers interactive recovery menus
@@ -377,26 +437,29 @@ flowchart TD
 
 ### 1. CLI Subsystem
 
-**Location**: [`src/cli/runtime.rs`](src/cli/runtime.rs:1)
+**Location**: [`src/cli/`](src/cli/) (modular directory structure)
 
-**Purpose**: Handles all user-facing command-line interactions, argument parsing, and user experience flows.
+**Purpose**: Handles all user-facing command-line interactions, argument parsing, and user experience flows through a modular architecture.
 
 **Key Components**:
-- **CLI Parser**: Uses `clap` derive macros for comprehensive argument handling with subcommands
-- **Setup Flow**: Interactive configuration wizard with OpenRouter model fetching and API key validation
-- **Model Selection**: Dynamic model fetching with interactive selection and free model filtering
-- **Provider Selection**: Interactive switching between OpenRouter and Cerebras with immediate configuration saving
-- **Intelligence Mode**: Enhanced command output explanation with question support and piped input handling
-- **Direct Chat**: Bypass planning for direct AI conversation with temperature control
-- **Configuration Management**: Direct configuration via command-line flags with environment variable support
-- **Welcome Message**: Comprehensive help system with usage examples when no arguments provided
+- **CLI Parser**: Defined in [`args.rs`](src/cli/args.rs:1) using `clap` derive macros for comprehensive argument handling
+- **Command Dispatcher**: Located in [`commands.rs`](src/cli/commands.rs:1) for routing to appropriate handlers
+- **Setup Flow**: Interactive configuration wizard in [`setup.rs`](src/cli/setup.rs:1) with OpenRouter model fetching
+- **Model Selection**: Dynamic model fetching with interactive selection in [`models.rs`](src/cli/models.rs:1)
+- **Provider Selection**: Interactive switching between OpenRouter and Cerebras in [`providers.rs`](src/cli/providers.rs:1)
+- **Intelligence Mode**: Enhanced command output explanation in [`intelligence.rs`](src/cli/intelligence.rs:1)
+- **Direct Chat**: Bypass planning for direct AI conversation in [`chat.rs`](src/cli/chat.rs:1)
+- **Configuration Management**: Direct configuration via CLI flags in [`config_cmd.rs`](src/cli/config_cmd.rs:1)
+- **Task Execution**: Main task handling in [`task.rs`](src/cli/task.rs:1) using the agent system
+- **CLI Utilities**: Shared utility functions in [`util.rs`](src/cli/util.rs:1)
 
 **Key Functions**:
-- [`Cli::run()`](src/cli/runtime.rs:450): Main execution dispatcher with comprehensive argument routing
-- [`handle_setup()`](src/cli/runtime.rs:1125): Interactive configuration with provider-specific setup
-- [`handle_chat_direct()`](src/cli/runtime.rs:1171): Direct AI conversation with configurable parameters
-- [`handle_intelligence()`](src/cli/runtime.rs:1276): Enhanced command output analysis with question support
-- [`handle_config_direct()`](src/cli/runtime.rs:1063): Direct configuration management via flags
+- [`commands::run()`](src/cli/commands.rs:1): Main execution dispatcher with comprehensive argument routing
+- [`setup::run_setup()`](src/cli/setup.rs:1): Interactive configuration with provider-specific setup
+- [`chat::handle_chat_direct()`](src/cli/chat.rs:1): Direct AI conversation with configurable parameters
+- [`intelligence::handle_intelligence()`](src/cli/intelligence.rs:1): Enhanced command output analysis with question support
+- [`config_cmd::handle_config_direct()`](src/cli/config_cmd.rs:1): Direct configuration management via flags
+- [`task::handle_task()`](src/cli/task.rs:1): Main task execution using the agent system
 
 ### 2. Agent Subsystem
 
@@ -418,20 +481,23 @@ flowchart TD
 
 ### 3. Planner Subsystem
 
-**Location**: [`src/planner/mod.rs`](src/planner/mod.rs:1)
+**Location**: [`src/planner/`](src/planner/) (modular directory structure)
 
-**Purpose**: Converts natural language requests into safe, minimal shell command sequences.
+**Purpose**: Converts natural language requests into safe, minimal shell command sequences through a focused module architecture.
 
 **Key Components**:
-- **Planning Engine**: AI-powered command generation
-- **Interactive Resolver**: Handles clarification questions
-- **JSON Extractor**: Robust parsing of AI responses
-- **Safety Constraints**: Built-in safety rules and validation
+- **Planning Engine**: AI-powered command generation in [`session.rs`](src/planner/session.rs:1)
+- **Interactive Resolver**: Handles clarification questions in [`session.rs`](src/planner/session.rs:1)
+- **JSON Extractor**: Robust parsing of AI responses in [`parsing.rs`](src/planner/parsing.rs:1)
+- **Transport Layer**: HTTP communication for AI requests in [`transport.rs`](src/planner/transport.rs:1)
+- **System Prompts**: LLM prompts and templates in [`prompt.rs`](src/planner/prompt.rs:1)
+- **Type Definitions**: Plan and related types in [`types.rs`](src/planner/types.rs:1)
 
 **Key Functions**:
-- [`plan()`](src/planner/mod.rs:290): Main planning function
-- [`interactive_plan()`](src/planner/mod.rs:209): Interactive planning with questions
-- [`extract_json_object()`](src/planner/mod.rs:110): Parse AI responses
+- [`plan()`](src/planner/mod.rs:1): Main planning function interface
+- [`session::interactive_plan_with_resolver()`](src/planner/session.rs:1): Interactive planning with questions
+- [`parsing::extract_json_object()`](src/planner/parsing.rs:1): Parse AI responses
+- [`transport::send_planning_request()`](src/planner/transport.rs:1): Send requests to AI providers
 
 **Safety Features**:
 - Prefers dry-run commands first
@@ -488,20 +554,22 @@ flowchart TD
 
 ### 6. Recovery Subsystem
 
-**Location**: [`src/recovery/mod.rs`](src/recovery/mod.rs:1)
+**Location**: [`src/recovery/`](src/recovery/) (modular directory structure)
 
-**Purpose**: Provides intelligent recovery options when commands are missing or unavailable.
+**Purpose**: Provides intelligent recovery options when commands are missing or unavailable through a focused module architecture.
 
 **Key Components**:
-- **Recovery Engine**: Main recovery coordination
-- **Alternative Generator**: Suggests alternative commands
-- **Installation Provider**: Offers installation instructions
-- **Interactive Menu**: User-friendly recovery interface
+- **Recovery Engine**: Main recovery coordination in [`mod.rs`](src/recovery/mod.rs:1)
+- **AI Generator**: AI-powered recovery option generation in [`ai.rs`](src/recovery/ai.rs:1)
+- **Installation Provider**: Offers installation instructions in [`utils.rs`](src/recovery/utils.rs:1)
+- **Interactive Menu**: User-friendly recovery interface in [`ui.rs`](src/recovery/ui.rs:1)
+- **Type Definitions**: Recovery types and results in [`types.rs`](src/recovery/types.rs:1)
 
 **Key Functions**:
-- [`generate_recovery_options()`](src/recovery/mod.rs:127): Create recovery options
-- [`present_recovery_menu()`](src/recovery/mod.rs:502): Interactive recovery UI
-- [`execute_recovery()`](src/recovery/mod.rs:663): Execute user's recovery choice
+- [`generate_recovery_options()`](src/recovery/mod.rs:1): Create recovery options
+- [`ai::generate_recovery_with_ai()`](src/recovery/ai.rs:1): AI-powered recovery generation
+- [`ui::present_recovery_menu()`](src/recovery/ui.rs:1): Interactive recovery UI
+- [`execute_recovery()`](src/recovery/mod.rs:1): Execute user's recovery choice
 
 **Recovery Strategies**:
 - **Alternatives First**: Suggest alternative commands first
@@ -536,7 +604,7 @@ flowchart TD
 
 **Files to modify**:
 - [`src/config.rs`](src/config.rs:1) - Add new model defaults
-- [`src/cli/runtime.rs`](src/cli/runtime.rs:1) - Update model selection UI
+- [`src/cli/models.rs`](src/cli/models.rs:1) - Update model selection UI
 - [`src/client.rs`](src/client.rs:1) - Add model-specific handling
 
 **Example**: Adding a new provider
@@ -553,8 +621,9 @@ pub enum LlmProvider {
 ### 2. Extending Command Planning
 
 **Files to modify**:
-- [`src/planner/mod.rs`](src/planner/mod.rs:1) - Update system prompt or JSON schema
-- [`src/cli/runtime.rs`](src/cli/runtime.rs:1) - Adjust plan rendering/approval flow
+- [`src/planner/prompt.rs`](src/planner/prompt.rs:1) - Update system prompt
+- [`src/planner/types.rs`](src/planner/types.rs:1) - Update JSON schema
+- [`src/cli/task.rs`](src/cli/task.rs:1) - Adjust plan rendering/approval flow
 
 **Example**: Adding new safety heuristics
 ```rust
@@ -579,8 +648,8 @@ enum PlannerResponse {
 ### 3. Adding New Safety Rules
 
 **Files to modify**:
-- [`src/planner/mod.rs`](src/planner/mod.rs:1) - Update system prompt
-- [`src/planner/mod.rs`](src/planner/mod.rs:80) - Expand JSON schema
+- [`src/planner/prompt.rs`](src/planner/prompt.rs:1) - Update system prompt
+- [`src/planner/types.rs`](src/planner/types.rs:1) - Expand JSON schema
 
 **Example**: Adding execution context
 ```rust
@@ -601,7 +670,8 @@ enum PlannerResponse {
 ### 4. Expanding Recovery Options
 
 **Files to modify**:
-- [`src/recovery/mod.rs`](src/recovery/mod.rs:1) - Add new recovery strategies
+- [`src/recovery/types.rs`](src/recovery/types.rs:1) - Add new recovery types
+- [`src/recovery/ai.rs`](src/recovery/ai.rs:1) - Implement new recovery generation logic
 - [`src/config.rs`](src/config.rs:1) - Update configuration options
 
 **Example**: Adding auto-recovery
@@ -620,8 +690,9 @@ pub enum RecoveryPreference {
 ### 5. Adding New CLI Commands
 
 **Files to modify**:
-- [`src/cli/runtime.rs`](src/cli/runtime.rs:1) - Add new enum variants to `Command`
-- [`src/cli/runtime.rs`](src/cli/runtime.rs:456) - Add new handlers
+- [`src/cli/args.rs`](src/cli/args.rs:1) - Add new enum variants to `Command`
+- [`src/cli/commands.rs`](src/cli/commands.rs:1) - Add new routing logic
+- Create new modules in `src/cli/` for command implementation
 
 **Example**: Adding a "history" command
 ```rust
@@ -641,8 +712,9 @@ async fn handle_history(args: HistoryArgs, config: &Config) -> Result<()> {
 
 **Files to modify**:
 - [`src/exec/mod.rs`](src/exec/mod.rs:1) - Update output streaming
-- [`src/cli/runtime.rs`](src/cli/runtime.rs:1) - Modify plan display
-- [`src/recovery/mod.rs`](src/recovery/mod.rs:1) - Update recovery UI
+- [`src/cli/task.rs`](src/cli/task.rs:1) - Modify plan display
+- [`src/recovery/ui.rs`](src/recovery/ui.rs:1) - Update recovery UI
+- [`src/cli/util.rs`](src/cli/util.rs:1) - Modify shared output utilities
 
 ### 7. Adding New Validation Checks
 
@@ -784,16 +856,22 @@ pub enum AgentOutcome {
 
 ## Conclusion
 
-The li CLI assistant represents a sophisticated, modular architecture designed for safety, extensibility, and user experience. The system separates concerns through a pipeline-based approach, allowing each component to focus on its specific responsibility while maintaining clear interfaces between modules.
+The li CLI assistant represents a sophisticated, modular architecture designed for safety, extensibility, and user experience. Following a recent refactor, the system now features enhanced modularity with focused components and clear separation of concerns through a pipeline-based architecture.
 
 Key architectural strengths:
-- **Modular Design**: Clear separation between CLI, agent, execution, and service layers
+- **Enhanced Modular Design**: CLI, planner, and recovery systems have been refactored into focused modules for better maintainability
+- **Pipeline-Based Architecture**: Clear separation between CLI, agent, planning, validation, execution, and recovery layers
 - **Safety-First Approach**: Multiple validation stages and user approval requirements with confidence scoring
 - **Extensible Pipeline**: Adapter-based system allows easy addition of new processing stages
 - **Robust Error Handling**: Comprehensive recovery system with AI-powered suggestions
 - **Configuration Flexibility**: Multiple configuration sources with comprehensive environment variable support
 - **Pluggable Providers**: Easy to swap hosted LLMs without changing the core pipeline
-- **Enhanced User Experience**: Interactive setup, intelligent mode, and comprehensive help system
+- **Enhanced User Experience**: Interactive setup, intelligence mode, and modular command handling
+
+Recent Improvements:
+- **CLI Module Refactoring**: Monolithic runtime.rs replaced with focused modules (args.rs, commands.rs, task.rs, etc.)
+- **Planner Decomposition**: Single planning module split into session, prompt, transport, parsing, and types modules
+- **Recovery Enhancement**: Recovery system organized into specialized modules for AI generation, UI, types, and utilities
 
 The architecture is well-positioned for future enhancements including additional AI providers and extended command capabilities while maintaining backward compatibility and user safety.
 
