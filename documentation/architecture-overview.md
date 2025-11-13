@@ -221,6 +221,12 @@ graph TD
     Runtime -->|Build Request| Orchestrator
     Orchestrator -->|Produce Events| Context
     Orchestrator -->|Invoke Adapter| Planning
+    Planning -->|AI Request| LLMClient
+    LLMClient -->|Provider Choice| Provider{Provider}
+    Provider -->|OpenRouter| OpenRouterAPI[OpenRouter API]
+    Provider -->|Cerebras| CerebrasAPI[Cerebras API]
+    OpenRouterAPI -->|AI Response| Planning
+    CerebrasAPI -->|AI Response| Planning
     Planning -->|Plan Ready| Orchestrator
     Orchestrator -->|Validate| Validation
     Validation -->|Missing Tools| Recovery
@@ -258,16 +264,27 @@ sequenceDiagram
     participant CLI
     participant Orchestrator
     participant Planner
+    participant LLMClient
+    participant OpenRouter
+    participant Cerebras
     participant Validator
     participant Recovery
     participant Executor
-    participant AI
 
     User->>CLI: li 'make a git repo'
     CLI->>Orchestrator: Process request
     Orchestrator->>Planner: Generate plan
-    Planner->>AI: Convert to shell commands
-    AI-->>Planner: JSON plan response
+    Planner->>LLMClient: Send planning request
+    
+    alt Provider is OpenRouter
+        LLMClient->>OpenRouter: API request
+        OpenRouter-->>LLMClient: AI response
+    else Provider is Cerebras
+        LLMClient->>Cerebras: API request
+        Cerebras-->>LLMClient: AI response
+    end
+    
+    LLMClient-->>Planner: Parsed AI response
     Planner-->>Orchestrator: Structured plan
 
     Orchestrator->>Validator: Check commands
@@ -326,27 +343,32 @@ graph TD
 flowchart TD
     A[Agent Request] --> B[Planning Stage]
     B --> C[AI Planning Service]
-    C --> D{Plan Generated?}
-    D -- Needs Clarification --> E[Ask User Question]
-    E --> B
-    D -- Plan Ready --> F[Validation Stage]
+    C --> D[Select Provider]
+    D --> E{Provider Type}
+    E -- OpenRouter --> F[OpenRouter API]
+    E -- Cerebras --> G[Cerebras API]
+    F --> H{Plan Generated?}
+    G --> H
+    H -- Needs Clarification --> I[Ask User Question]
+    I --> B
+    H -- Plan Ready --> J[Validation Stage]
 
-    F --> G[Check Command Availability]
-    G --> H{All Commands Found?}
-    H -- Missing --> I[Recovery Stage]
-    I --> F
-    H -- Found --> J[Present Plan to User]
+    J --> K[Check Command Availability]
+    K --> L{All Commands Found?}
+    L -- Missing --> M[Recovery Stage]
+    M --> J
+    L -- Found --> N[Present Plan to User]
 
-    J --> K{User Approval}
-    K -- Approve --> L[Execution Stage]
-    K -- Decline --> M[Abort Pipeline]
-    K -- Intelligence --> N[Execute + Explain]
+    N --> O{User Approval}
+    O -- Approve --> P[Execution Stage]
+    O -- Decline --> Q[Abort Pipeline]
+    O -- Intelligence --> R[Execute + Explain]
 
-    L --> O[Execute Commands]
-    N --> O
-    O --> P{Execution Success}
-    P -- Yes --> Q[Report Success]
-    P -- No --> R[Report Failure]
+    P --> S[Execute Commands]
+    R --> S
+    S --> T{Execution Success}
+    T -- Yes --> U[Report Success]
+    T -- No --> V[Report Failure]
 ```
 
 ---
@@ -758,14 +780,6 @@ pub enum AgentOutcome {
 }
 ```
 
-### 8. Future Extensibility
-
-**Placeholder Modules**: The project includes placeholder directories for future enhancements:
-- [`src/classifier/`](src/classifier/): Intended for command classification and intent detection
-- [`src/hook/`](src/hook/): Planned for command execution hooks and plugins
-
-These directories are currently empty but reserved for future architectural extensions.
-
 ---
 
 ## Conclusion
@@ -781,7 +795,7 @@ Key architectural strengths:
 - **Pluggable Providers**: Easy to swap hosted LLMs without changing the core pipeline
 - **Enhanced User Experience**: Interactive setup, intelligent mode, and comprehensive help system
 
-The architecture is well-positioned for future enhancements including additional AI providers, extended command capabilities, and the planned classifier and hook systems while maintaining backward compatibility and user safety.
+The architecture is well-positioned for future enhancements including additional AI providers and extended command capabilities while maintaining backward compatibility and user safety.
 
 **Current Version**: 0.1.1 (as of Cargo.toml)
 
