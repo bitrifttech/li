@@ -6,7 +6,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::classifier::{self, Classification};
-use crate::client::{LlmClientFactory, OpenRouterClientFactory};
+use crate::client::{DefaultLlmClientFactory, LlmClientFactory};
 use crate::exec;
 use crate::planner::{self, Plan};
 use crate::validator::{self, ValidationResult};
@@ -52,7 +52,7 @@ impl DirectClassifierAdapter {
 
 impl Default for DirectClassifierAdapter {
     fn default() -> Self {
-        Self::new(Arc::new(OpenRouterClientFactory::default()))
+        Self::new(Arc::new(DefaultLlmClientFactory::default()))
     }
 }
 
@@ -82,7 +82,7 @@ impl DirectPlanningAdapter {
 
 impl Default for DirectPlanningAdapter {
     fn default() -> Self {
-        Self::new(Arc::new(OpenRouterClientFactory::default()))
+        Self::new(Arc::new(DefaultLlmClientFactory::default()))
     }
 }
 

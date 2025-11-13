@@ -68,13 +68,13 @@ pub async fn classify(client: &DynLlmClient, input: &str, model: &str) -> Result
     let response = client
         .chat_completion(request)
         .await
-        .context("OpenRouter classifier call failed")?;
+        .context("Classifier LLM call failed")?;
 
     let choice = response
         .choices
         .into_iter()
         .next()
-        .ok_or_else(|| anyhow!("OpenRouter classifier returned no choices"))?;
+        .ok_or_else(|| anyhow!("Classifier response contained no choices"))?;
 
     let content = choice.message.content.trim();
     if content.is_empty() {

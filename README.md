@@ -14,9 +14,10 @@
 - 🎯 **Smart Classification**: Automatically distinguishes between shell commands and natural language tasks
 - 💬 **Direct AI Chat**: Use `--chat` flag for conversational AI assistance
 - 🧠 **AI Intelligence Mode**: Use `-i` flag to explain command outputs in human-friendly terms
+- 🌐 **Provider Choice**: Switch between OpenRouter and Cerebras with `li --provider`
 - 🔧 **Interactive Setup**: Easy first-time configuration with `li --setup`
 - 🎨 **Visual Separators**: Clear distinction between li output and command output
-- 📋 **Model Selection**: Choose from OpenRouter's free AI models
+- 📋 **Model Selection**: Browse OpenRouter's free models when using that provider
 - 🪝 **Shell Hook Integration**: Optional zsh hook for seamless terminal experience
 
 ## 🚀 Quick Start
@@ -49,14 +50,19 @@ cargo install --git https://github.com/bitrifttech/li.git
    ```
    
    This will guide you through:
-   - Setting up your OpenRouter API key
-   - Selecting classifier and planner models
+   - Choosing your AI provider (OpenRouter or Cerebras)
+   - Supplying the provider API key
+   - Selecting classifier and planner models (OpenRouter only)
    - Configuring timeout and token limits
 
-2. **Get your OpenRouter API key**:
-   - Visit [https://openrouter.ai/](https://openrouter.ai/)
-   - Sign up for a free account
-   - Copy your API key (starts with `sk-or-v1-`)
+2. **Add your provider API key**:
+   - **OpenRouter**:
+     - Visit [https://openrouter.ai/](https://openrouter.ai/)
+     - Sign up for a free account
+     - Copy your API key (starts with `sk-or-v1-`)
+   - **Cerebras**:
+     - Use your Cerebras Inference API key (set via the Cerebras account dashboard)
+     - Export it as `CEREBRAS_API_KEY` or provide it during setup
 
 3. **Try it out**:
    ```bash
@@ -89,6 +95,10 @@ li -i 'ls -la'                                   # Understand file permissions
 # Interactive model selection
 li --model
 li --model list
+
+# Provider selection
+li --provider
+li --provider list
 
 # Manual configuration
 li config --api-key YOUR_OPENROUTER_API_KEY
@@ -232,6 +242,9 @@ You can override configuration with environment variables:
 
 ```bash
 export OPENROUTER_API_KEY="sk-or-v1-your-api-key"
+export CEREBRAS_API_KEY="cb-your-api-key"
+export LI_PROVIDER="openrouter"          # or 'cerebras'
+export LI_LLM_BASE_URL="https://openrouter.ai/api/v1"
 export LI_TIMEOUT_SECS="60"
 export LI_MAX_TOKENS="4096"
 export LI_CLASSIFIER_MODEL="nvidia/nemotron-nano-12b-v2-vl:free"
@@ -251,13 +264,16 @@ li --config --planner-model minimax/minimax-m2:free
 # Adjust settings
 li --config --timeout 60
 li --config --max-tokens 4096
+
+# Switch providers on the fly
+li --provider cerebras
 ```
 
 ## 🤖 AI Models
 
-li uses OpenRouter's free AI models:
+li ships with OpenRouter defaults and supports additional providers such as Cerebras.
 
-### Default Models
+### OpenRouter Defaults
 - **Classifier**: `nvidia/nemotron-nano-12b-v2-vl:free` - Fast, accurate command classification
 - **Planner**: `minimax/minimax-m2:free` - Intelligent shell command planning
 
@@ -266,6 +282,10 @@ li uses OpenRouter's free AI models:
 li --model list    # Show all available free models
 li --model         # Interactive model selection
 ```
+
+### Cerebras Models
+- Provide model IDs from your Cerebras workspace during setup or via `li --config`
+- Use `CEREBRAS_API_KEY` and optional `LI_LLM_BASE_URL` to target custom deployments
 
 ## 🪝 Shell Integration (Optional)
 
@@ -291,6 +311,7 @@ li uninstall
 ## 🎨 Output Examples
 
 ### Command Planning
+_Example output using the OpenRouter provider_
 ```bash
 $ li 'create a new git repository'
 
@@ -340,6 +361,7 @@ Execute this plan? [y/N]: y
 ```
 
 ### Direct Chat
+_Example output using the OpenRouter provider_
 ```bash
 $ li --chat "what is the capital of France?"
 
@@ -424,7 +446,7 @@ src/
 ├── main.rs              # Entry point
 ├── cli.rs               # CLI arguments and commands
 ├── config.rs            # Configuration management
-├── client.rs            # OpenRouter API client
+├── client.rs            # LLM provider client (OpenRouter, Cerebras)
 ├── classifier/          # Command classification logic
 ├── planner/             # Command planning logic
 ├── exec/                # Command execution

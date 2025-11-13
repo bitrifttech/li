@@ -1,6 +1,8 @@
 use crate::agent::{AgentOrchestrator, AgentOutcome, AgentRequest, StageKind};
-use crate::client::{AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole, LlmClient};
-use crate::config::{Config, DEFAULT_MAX_TOKENS};
+use crate::client::{
+    AIClient, ChatCompletionRequest, ChatMessage, ChatMessageRole, LlmClient, set_verbose_logging,
+};
+use crate::config::{Config, DEFAULT_MAX_TOKENS, LlmProvider};
 use crate::exec;
 use crate::recovery::{RecoveryContext, RecoveryEngine, RecoveryResult};
 use crate::validator::ValidationResult;
@@ -10,8 +12,10 @@ use clap::{Args, Parser, Subcommand};
 use serde::Deserialize;
 use std::io::{self, Write};
 use std::process;
+use std::str::FromStr;
 
 const CONTEXT_HEADROOM_TOKENS: usize = 1024;
+const PROVIDER_CHOICES: &[LlmProvider] = &[LlmProvider::OpenRouter, LlmProvider::Cerebras];
 
 fn derive_max_tokens(context_length: Option<usize>) -> u32 {
     context_length
@@ -20,6 +24,264 @@ fn derive_max_tokens(context_length: Option<usize>) -> u32 {
         .map(|len| len.min(u32::MAX as usize) as u32)
         .filter(|&tokens| tokens > 0)
         .unwrap_or(DEFAULT_MAX_TOKENS)
+}
+
+fn provider_description(provider: LlmProvider) -> &'static str {
+    match provider {
+        LlmProvider::OpenRouter => "OpenRouter marketplace of hosted inference models",
+        LlmProvider::Cerebras => "Cerebras Inference deployment",
+    }
+}
+
+fn print_provider_list() {
+    println!("\n🌐 Available Providers:\n");
+    for provider in PROVIDER_CHOICES {
+        println!(
+            "  {} ({}) - {}",
+            provider,
+            provider.display_name(),
+            provider_description(*provider)
+        );
+    }
+    println!();
+}
+
+fn prompt_provider_interactive(current: Option<LlmProvider>) -> Result<LlmProvider> {
+    println!("\n🌐 Available Providers:\n");
+    for (idx, provider) in PROVIDER_CHOICES.iter().enumerate() {
+        let marker = if Some(*provider) == current {
+            " (current)"
+        } else {
+            ""
+        };
+        println!(
+            "  {}. {}{} - {}",
+            idx + 1,
+            provider.display_name(),
+            marker,
+            provider_description(*provider)
+        );
+    }
+
+    loop {
+        print!("\nSelect provider (1-{}): ", PROVIDER_CHOICES.len());
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let trimmed = input.trim();
+
+        match trimmed.parse::<usize>() {
+            Ok(num) if num >= 1 && num <= PROVIDER_CHOICES.len() => {
+                return Ok(PROVIDER_CHOICES[num - 1]);
+            }
+            _ => println!(
+                "❌ Please enter a number between 1 and {}.",
+                PROVIDER_CHOICES.len()
+            ),
+        }
+    }
+}
+
+fn prompt_api_key_for_provider(provider: LlmProvider, existing: Option<&str>) -> Result<String> {
+    loop {
+        match provider {
+            LlmProvider::OpenRouter => {
+                print!(
+                    "🔑 Enter your OpenRouter API key{}: ",
+                    existing
+                        .map(|_| " (leave blank to keep current)")
+                        .unwrap_or("")
+                );
+            }
+            LlmProvider::Cerebras => {
+                print!(
+                    "🔑 Enter your Cerebras API key{}: ",
+                    existing
+                        .map(|_| " (leave blank to keep current)")
+                        .unwrap_or("")
+                );
+            }
+        }
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let key = input.trim();
+
+        if key.is_empty() {
+            if let Some(existing) = existing {
+                return Ok(existing.to_string());
+            }
+            println!("❌ API key cannot be empty. Please try again.");
+            continue;
+        }
+
+        if provider == LlmProvider::OpenRouter && !key.starts_with("sk-or-v1") {
+            println!(
+                "⚠️  OpenRouter API keys typically start with 'sk-or-v1'. Are you sure this is correct?"
+            );
+            print!("Continue anyway? [y/N]: ");
+            io::stdout().flush()?;
+
+            let mut confirm = String::new();
+            io::stdin().read_line(&mut confirm)?;
+            if confirm.trim().to_lowercase() != "y" {
+                continue;
+            }
+        }
+
+        return Ok(key.to_string());
+    }
+}
+
+fn prompt_timeout(default: u64) -> Result<u64> {
+    loop {
+        print!("⏱️  Enter timeout in seconds (default: {default}): ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let timeout_str = input.trim();
+
+        if timeout_str.is_empty() {
+            return Ok(default);
+        }
+
+        match timeout_str.parse::<u64>() {
+            Ok(timeout) if timeout > 0 => return Ok(timeout),
+            Ok(_) => println!("❌ Timeout must be a positive number."),
+            Err(_) => println!("❌ Please enter a valid number."),
+        }
+    }
+}
+
+fn prompt_string_with_default(prompt: &str, default: &str) -> Result<String> {
+    print!("{prompt} (default: {default}): ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let trimmed = input.trim();
+
+    if trimmed.is_empty() {
+        Ok(default.to_string())
+    } else {
+        Ok(trimmed.to_string())
+    }
+}
+
+fn prompt_u32_with_default(prompt: &str, default: u32) -> Result<u32> {
+    loop {
+        print!("{prompt} (default: {default}): ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let trimmed = input.trim();
+
+        if trimmed.is_empty() {
+            return Ok(default);
+        }
+
+        match trimmed.parse::<u32>() {
+            Ok(value) if value > 0 => return Ok(value),
+            Ok(_) => println!("❌ Value must be greater than zero."),
+            Err(_) => println!("❌ Please enter a valid number."),
+        }
+    }
+}
+
+fn mask_api_key(key: &str) -> String {
+    if key.is_empty() {
+        return "(not set)".to_string();
+    }
+
+    let visible = key.len().min(8);
+    format!("{}***", &key[..visible])
+}
+
+fn prompt_model_index(models: &[OpenRouterModel], label: &str) -> Result<usize> {
+    loop {
+        print!("{label}");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let choice = input.trim();
+
+        if choice.is_empty() {
+            println!("❌ Please select a model number.");
+            continue;
+        }
+
+        match choice.parse::<usize>() {
+            Ok(num) if num >= 1 && num <= models.len() => {
+                return Ok(num - 1);
+            }
+            Ok(_) => println!("❌ Please enter a number between 1 and {}.", models.len()),
+            Err(_) => println!("❌ Please enter a valid number."),
+        }
+    }
+}
+
+async fn configure_openrouter_setup(config: &mut Config, api_key: &str) -> Result<()> {
+    println!("\n📡 Fetching available free models from OpenRouter...");
+    let models = fetch_openrouter_free_models(api_key).await?;
+
+    if models.is_empty() {
+        println!("⚠️  No free OpenRouter models were returned. Keeping existing model settings.");
+        return Ok(());
+    }
+
+    println!("\n🤖 Available Free Models:\n");
+    for (idx, model) in models.iter().enumerate() {
+        let context_len = model
+            .context_length
+            .map(|len| format!(" ({} context)", len))
+            .unwrap_or_default();
+        println!("  {}. {}{}", idx + 1, model.name, context_len);
+    }
+
+    let classifier_index = prompt_model_index(
+        &models,
+        "\n🧠 Select classifier model (determines if input is a command or needs planning): ",
+    )?;
+    let planner_index = prompt_model_index(
+        &models,
+        "\n📋 Select planner model (creates shell commands from natural language): ",
+    )?;
+
+    let classifier_model = models[classifier_index].id.clone();
+    let planner_selection = &models[planner_index];
+    let planner_model = planner_selection.id.clone();
+    let derived_max_tokens = derive_max_tokens(planner_selection.context_length);
+
+    config.models.classifier = classifier_model;
+    config.models.planner = planner_model;
+    config.models.max_tokens = derived_max_tokens;
+
+    Ok(())
+}
+
+fn configure_cerebras_setup(config: &mut Config) -> Result<()> {
+    println!("\nℹ️  Cerebras setup requires entering model identifiers manually.");
+    println!("   Refer to your Cerebras deployment documentation for model IDs.\n");
+
+    let default_classifier = config.models.classifier.clone();
+    let default_planner = config.models.planner.clone();
+    let default_max_tokens = config.models.max_tokens;
+
+    config.models.classifier =
+        prompt_string_with_default("🧠 Enter classifier model ID", &default_classifier)?;
+    config.models.planner =
+        prompt_string_with_default("📋 Enter planner model ID", &default_planner)?;
+    config.models.max_tokens = prompt_u32_with_default(
+        "🔢 Enter max tokens for planner completions",
+        default_max_tokens,
+    )?;
+
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -81,38 +343,6 @@ async fn fetch_openrouter_free_models(api_key: &str) -> Result<Vec<OpenRouterMod
     Ok(free_models)
 }
 
-async fn select_model_interactively(models: Vec<OpenRouterModel>) -> Result<String> {
-    println!("\n🤖 Available OpenRouter Free Models:\n");
-
-    for (idx, model) in models.iter().enumerate() {
-        let context_len = model
-            .context_length
-            .map(|len| format!(" ({} context)", len))
-            .unwrap_or_default();
-        println!("  {}. {}{}", idx + 1, model.name, context_len);
-    }
-
-    print!("\nSelect a model (1-{}): ", models.len());
-    io::stdout().flush()?;
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-
-    let selection: usize = input
-        .trim()
-        .parse()
-        .context("Please enter a valid number")?;
-
-    if selection == 0 || selection > models.len() {
-        return Err(anyhow!(
-            "Please select a number between 1 and {}",
-            models.len()
-        ));
-    }
-
-    Ok(models[selection - 1].id.clone())
-}
-
 /// Entry point for the `li` command-line interface.
 #[derive(Debug, Parser)]
 #[command(
@@ -133,6 +363,14 @@ pub struct Cli {
     /// Override the model (for OpenRouter, fetches free models list)
     #[arg(short = 'm', long = "model", num_args = 0..=1, default_missing_value = "")]
     pub model: Option<String>,
+
+    /// Select the LLM provider (e.g., openrouter or cerebras)
+    #[arg(long = "provider", num_args = 0..=1, default_missing_value = "")]
+    pub provider: Option<String>,
+
+    /// Enable verbose logging of LLM requests and responses
+    #[arg(short = 'v', long = "verbose")]
+    pub verbose: bool,
 
     /// Interactive setup for first-time configuration
     #[arg(long = "setup")]
@@ -206,10 +444,12 @@ pub struct ChatArgs {
 
 impl Cli {
     pub async fn run_setup(self) -> Result<()> {
+        set_verbose_logging(self.verbose);
         handle_setup().await
     }
 
     pub async fn run(self, mut config: Config) -> Result<()> {
+        set_verbose_logging(self.verbose);
         // Check for empty task (show welcome message)
         let prompt = self.task.join(" ").trim().to_owned();
         if prompt.is_empty()
@@ -219,6 +459,7 @@ impl Cli {
             && !self.config
             && self.command.is_none()
             && self.model.is_none()
+            && self.provider.is_none()
             && self.api_key.is_none()
             && self.timeout.is_none()
             && self.max_tokens.is_none()
@@ -236,7 +477,7 @@ impl Cli {
             println!("   • Converts natural language to shell commands");
             println!("   • Gives intellegent analysis of command output");
             println!("   • Executes safe, minimal command plans");
-            println!("   • Powered by OpenRouter's free AI models");
+            println!("   • Powered by configurable LLM providers (OpenRouter, Cerebras)");
             println!();
 
             if !config_exists {
@@ -269,6 +510,12 @@ impl Cli {
                 "   li --model list                                    # Show available models"
             );
             println!(
+                "   li --provider                                      # Interactive provider selection"
+            );
+            println!(
+                "   li --provider list                                 # Show supported providers"
+            );
+            println!(
                 "   li --config --api-key YOUR_KEY                     # Set API key manually"
             );
             println!(
@@ -286,7 +533,11 @@ impl Cli {
                 match Config::load() {
                     Ok(loaded_config) => {
                         println!("📋 Your current configuration:");
-                        println!("   Provider: {}", loaded_config.llm.provider);
+                        println!(
+                            "   Provider: {} ({})",
+                            loaded_config.llm.provider,
+                            loaded_config.llm.provider.display_name()
+                        );
                         println!("   Classifier: {}", loaded_config.models.classifier);
                         println!("   Planner: {}", loaded_config.models.planner);
                         println!("   Timeout: {}s", loaded_config.llm.timeout_secs);
@@ -319,8 +570,102 @@ impl Cli {
             return handle_chat_direct(&prompt, &config).await;
         }
 
+        // Handle provider override
+        if let Some(ref provider_arg) = self.provider {
+            let provider_arg = provider_arg.trim();
+            if provider_arg.eq_ignore_ascii_case("list") {
+                print_provider_list();
+                return Ok(());
+            } else if provider_arg.eq_ignore_ascii_case("interactive") || provider_arg.is_empty() {
+                let selected = prompt_provider_interactive(Some(config.llm.provider))?;
+                let existing_key =
+                    if config.llm.provider == selected && !config.llm.api_key.is_empty() {
+                        Some(config.llm.api_key.as_str())
+                    } else {
+                        None
+                    };
+                let api_key = prompt_api_key_for_provider(selected, existing_key)?;
+
+                if config.llm.provider != selected {
+                    config.llm.provider = selected;
+                    config.llm.base_url = selected.default_base_url().to_string();
+                }
+                config.llm.api_key = api_key;
+                config.save()?;
+
+                println!(
+                    "\n✅ Provider configuration saved to {}",
+                    Config::config_path()?.display()
+                );
+                println!("📋 Current provider:");
+                println!(
+                    "   Provider: {} ({})",
+                    config.llm.provider,
+                    config.llm.provider.display_name()
+                );
+                println!("   Base URL: {}", config.llm.base_url);
+
+                if config.llm.api_key.trim().is_empty() {
+                    println!(
+                        "⚠️  {} API key is empty. Set {} or run 'li --setup'.",
+                        config.llm.provider.display_name(),
+                        config.llm.provider.api_key_env_var()
+                    );
+                }
+
+                return Ok(());
+            } else {
+                match LlmProvider::from_str(provider_arg) {
+                    Ok(provider) => {
+                        let mut changed = false;
+                        if config.llm.provider != provider {
+                            config.llm.provider = provider;
+                            config.llm.base_url = provider.default_base_url().to_string();
+                            changed = true;
+                        }
+                        if changed {
+                            config.save()?;
+                            println!(
+                                "✅ Provider set to {} ({}).",
+                                config.llm.provider,
+                                config.llm.provider.display_name()
+                            );
+                            if config.llm.api_key.trim().is_empty() {
+                                println!(
+                                    "⚠️  {} API key is not configured. Set {} or run 'li --setup'.",
+                                    config.llm.provider.display_name(),
+                                    config.llm.provider.api_key_env_var()
+                                );
+                            }
+                        } else {
+                            println!(
+                                "ℹ️  Provider already set to {}.",
+                                config.llm.provider.display_name()
+                            );
+                        }
+                    }
+                    Err(_) => {
+                        println!(
+                            "Unknown provider '{}'. Use 'li --provider list' to see supported providers.",
+                            provider_arg
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
         // Handle model override
         if let Some(ref model_arg) = self.model {
+            if config.llm.provider != LlmProvider::OpenRouter {
+                println!(
+                    "Model selection via --model is currently supported only for the OpenRouter provider."
+                );
+                println!(
+                    "Use 'li --provider openrouter' or 'li --provider interactive' to switch providers."
+                );
+                return Ok(());
+            }
             let models = fetch_openrouter_free_models(&config.llm.api_key).await?;
             if model_arg == "list" {
                 // Just list the models
@@ -483,7 +828,7 @@ async fn handle_chat(args: ChatArgs, config: &Config) -> Result<()> {
         })
         .await?;
 
-    println!("Provider: OpenRouter");
+    println!("Provider: {}", config.llm.provider.display_name());
     println!("Model: {}", model);
 
     for (idx, choice) in response.choices.iter().enumerate() {
@@ -502,7 +847,7 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
     let prompt = words.join(" ").trim().to_owned();
     if prompt.is_empty() {
         println!(
-            "li CLI is initialized. Provide a task or run `li --chat \"your question\"` to call OpenRouter."
+            "li CLI is initialized. Provide a task or run `li --chat \"your question\"` to call your configured provider."
         );
         return Ok(());
     }
@@ -512,7 +857,7 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
         let classification =
             classifier::classify(&client, &prompt, &config.models.classifier).await?;
 
-        println!("Provider: {}", config.llm.provider);
+        println!("Provider: {}", config.llm.provider.display_name());
         println!("Classifier Model: {}", config.models.classifier);
         println!("Classification: {}", classification_label(classification));
 
@@ -588,17 +933,17 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
         }
         AgentOutcome::Failed { stage, error } => {
             let guidance = match stage {
-                StageKind::Classification | StageKind::Planning => {
-                    "Verify your OpenRouter API key (li --setup) and ensure you have internet connectivity. Retry if the service is rate limited."
-                }
-                StageKind::Validation => {
-                    "Inspect the validator warnings above for missing tools before rerunning the command."
-                }
+                StageKind::Classification | StageKind::Planning => format!(
+                    "Verify your {} API key (set {} or run 'li --setup') and ensure you have internet connectivity. Retry if the service is rate limited.",
+                    config.llm.provider.display_name(),
+                    config.llm.provider.api_key_env_var()
+                ),
+                StageKind::Validation => "Inspect the validator warnings above for missing tools before rerunning the command.".to_string(),
                 StageKind::Execution => {
-                    "Review the command output above for failures before retrying."
+                    "Review the command output above for failures before retrying.".to_string()
                 }
                 StageKind::Recovery => {
-                    "Recovery cancelled. Resolve tool installation manually or re-run with recovery enabled."
+                    "Recovery cancelled. Resolve tool installation manually or re-run with recovery enabled.".to_string()
                 }
             };
             bail!("Agent stage {} failed: {}. {}", stage, error, guidance);
@@ -724,7 +1069,7 @@ async fn resolve_validation_issues(
 }
 
 fn render_plan(plan: &planner::Plan, config: &Config) {
-    println!("\nProvider: OpenRouter");
+    println!("\nProvider: {}", config.llm.provider.display_name());
     println!("Model: {}", config.models.planner);
     println!("Plan confidence: {:.2}", plan.confidence);
 
@@ -833,7 +1178,11 @@ async fn handle_config_direct(args: &Cli, config: &mut Config) -> Result<()> {
         Config::config_path()?.display()
     );
     println!("📋 Current configuration:");
-    println!("   Provider: {}", existing_config.llm.provider);
+    println!(
+        "   Provider: {} ({})",
+        existing_config.llm.provider,
+        existing_config.llm.provider.display_name()
+    );
     println!("   API Key: {}", truncated_key);
     println!("   Timeout: {}s", existing_config.llm.timeout_secs);
     println!("   Max Tokens: {}", existing_config.models.max_tokens);
@@ -845,134 +1194,22 @@ async fn handle_config_direct(args: &Cli, config: &mut Config) -> Result<()> {
 
 async fn handle_setup() -> Result<()> {
     println!("🚀 Welcome to li CLI Setup!");
-    println!("Let's configure your OpenRouter integration.\n");
+    println!("Let's configure your AI provider.\n");
 
-    // Get API key
-    let api_key = loop {
-        print!("🔑 Enter your OpenRouter API key: ");
-        io::stdout().flush()?;
+    let provider = prompt_provider_interactive(None)?;
+    let api_key = prompt_api_key_for_provider(provider, None)?;
+    let timeout = prompt_timeout(30)?;
 
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let key = input.trim();
+    let mut config = Config::builder().build()?;
+    config.llm.provider = provider;
+    config.llm.base_url = provider.default_base_url().to_string();
+    config.llm.api_key = api_key.clone();
+    config.llm.timeout_secs = timeout;
 
-        if key.is_empty() {
-            println!("❌ API key cannot be empty. Please try again.");
-            continue;
-        }
-
-        if key.starts_with("sk-or-v1") {
-            break key.to_string();
-        } else {
-            println!(
-                "⚠️  OpenRouter API keys typically start with 'sk-or-v1'. Are you sure this is correct?"
-            );
-            print!("Continue anyway? [y/N]: ");
-            io::stdout().flush()?;
-
-            let mut confirm = String::new();
-            io::stdin().read_line(&mut confirm)?;
-            if confirm.trim().to_lowercase() == "y" {
-                break key.to_string();
-            }
-        }
-    };
-
-    // Get timeout
-    let timeout = loop {
-        print!("⏱️  Enter timeout in seconds (default: 30): ");
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let timeout_str = input.trim();
-
-        if timeout_str.is_empty() {
-            break 30u64;
-        }
-
-        match timeout_str.parse::<u64>() {
-            Ok(timeout) if timeout > 0 => break timeout,
-            Ok(_) => println!("❌ Timeout must be a positive number."),
-            Err(_) => println!("❌ Please enter a valid number."),
-        }
-    };
-
-    println!("\n📡 Fetching available free models from OpenRouter...");
-    let models = fetch_openrouter_free_models(&api_key).await?;
-
-    println!("\n🤖 Available Free Models:\n");
-    for (idx, model) in models.iter().enumerate() {
-        let context_len = model
-            .context_length
-            .map(|len| format!(" ({} context)", len))
-            .unwrap_or_default();
-        println!("  {}. {}{}", idx + 1, model.name, context_len);
+    match provider {
+        LlmProvider::OpenRouter => configure_openrouter_setup(&mut config, &api_key).await?,
+        LlmProvider::Cerebras => configure_cerebras_setup(&mut config)?,
     }
-
-    // Get classifier model
-    let classifier_index = loop {
-        print!(
-            "\n🧠 Select classifier model (determines if input is a command or needs planning): "
-        );
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let choice = input.trim();
-
-        if choice.is_empty() {
-            println!("❌ Please select a model number.");
-            continue;
-        }
-
-        match choice.parse::<usize>() {
-            Ok(num) if num >= 1 && num <= models.len() => {
-                break num - 1;
-            }
-            Ok(_) => println!("❌ Please enter a number between 1 and {}.", models.len()),
-            Err(_) => println!("❌ Please enter a valid number."),
-        }
-    };
-    let classifier_model = models[classifier_index].id.clone();
-
-    // Get planner model
-    let planner_index = loop {
-        print!("\n📋 Select planner model (creates shell commands from natural language): ");
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let choice = input.trim();
-
-        if choice.is_empty() {
-            println!("❌ Please select a model number.");
-            continue;
-        }
-
-        match choice.parse::<usize>() {
-            Ok(num) if num >= 1 && num <= models.len() => {
-                break num - 1;
-            }
-            Ok(_) => println!("❌ Please enter a number between 1 and {}.", models.len()),
-            Err(_) => println!("❌ Please enter a valid number."),
-        }
-    };
-    let planner_selection = &models[planner_index];
-    let planner_model = planner_selection.id.clone();
-    let derived_max_tokens = derive_max_tokens(planner_selection.context_length);
-
-    let config = Config::builder()
-        .with_llm(|llm| {
-            llm.api_key = api_key.clone();
-            llm.timeout_secs = timeout;
-        })
-        .with_models(|models| {
-            models.classifier = classifier_model.clone();
-            models.planner = planner_model.clone();
-            models.max_tokens = derived_max_tokens;
-        })
-        .build()?;
 
     config.validate()?;
     config.save()?;
@@ -983,9 +1220,12 @@ async fn handle_setup() -> Result<()> {
     );
     println!("📋 Your configuration:");
     println!(
-        "   API Key: {}***",
-        &config.llm.api_key[..config.llm.api_key.len().min(8)]
+        "   Provider: {} ({})",
+        config.llm.provider,
+        config.llm.provider.display_name()
     );
+    println!("   API Key: {}", mask_api_key(&config.llm.api_key));
+    println!("   Base URL: {}", config.llm.base_url);
     println!("   Timeout: {}s", config.llm.timeout_secs);
     println!("   Max Tokens: {}", config.models.max_tokens);
     println!("   Classifier Model: {}", config.models.classifier);
@@ -993,7 +1233,8 @@ async fn handle_setup() -> Result<()> {
     println!("\n🎉 Setup complete! You can now use 'li' with commands like:");
     println!("   li 'list all files in current directory'");
     println!("   li --chat 'what is the capital of France?'");
-    println!("   li -m list  # to see available models\n");
+    println!("   li -m list  # show free models (OpenRouter only)");
+    println!("   li --provider list  # see available providers\n");
 
     Ok(())
 }
@@ -1016,7 +1257,7 @@ async fn handle_chat_direct(prompt: &str, config: &Config) -> Result<()> {
         .await
         .context("Chat completion failed")?;
 
-    println!("Provider: OpenRouter");
+    println!("Provider: {}", config.llm.provider.display_name());
     println!("Model: {}", config.models.planner);
     println!();
 

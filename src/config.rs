@@ -12,6 +12,7 @@ pub(crate) const DEFAULT_MAX_TOKENS: u32 = 2048;
 const DEFAULT_CLASSIFIER_MODEL: &str = "nvidia/nemotron-nano-12b-v2-vl:free";
 const DEFAULT_PLANNER_MODEL: &str = "minimax/minimax-m2:free";
 const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+const DEFAULT_CEREBRAS_BASE_URL: &str = "https://api.cerebras.ai/v1";
 
 fn default_user_agent() -> String {
     format!("li/{}", env!("CARGO_PKG_VERSION"))
@@ -68,8 +69,12 @@ impl Config {
 
     pub fn validate(&self) -> Result<()> {
         if self.llm.api_key.trim().is_empty() {
+            let provider = self.llm.provider;
+            let env_var = provider.api_key_env_var();
             Err(anyhow!(
-                "OpenRouter API key not found. Set OPENROUTER_API_KEY or add it to {}",
+                "{} API key not found. Set {} or add it to {}",
+                provider.display_name(),
+                env_var,
                 Self::config_path()?.display()
             ))
         } else {
@@ -108,11 +113,12 @@ pub struct LlmSettings {
 
 impl Default for LlmSettings {
     fn default() -> Self {
+        let provider = LlmProvider::OpenRouter;
         Self {
-            provider: LlmProvider::OpenRouter,
+            provider,
             api_key: String::new(),
             timeout_secs: DEFAULT_TIMEOUT_SECS,
-            base_url: DEFAULT_OPENROUTER_BASE_URL.to_string(),
+            base_url: provider.default_base_url().to_string(),
             user_agent: default_user_agent(),
         }
     }
@@ -122,12 +128,14 @@ impl Default for LlmSettings {
 #[serde(rename_all = "kebab-case")]
 pub enum LlmProvider {
     OpenRouter,
+    Cerebras,
 }
 
 impl fmt::Display for LlmProvider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LlmProvider::OpenRouter => write!(f, "openrouter"),
+            LlmProvider::Cerebras => write!(f, "cerebras"),
         }
     }
 }
@@ -138,7 +146,31 @@ impl FromStr for LlmProvider {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "openrouter" => Ok(LlmProvider::OpenRouter),
+            "cerebras" => Ok(LlmProvider::Cerebras),
             other => Err(anyhow!("Unknown LLM provider '{other}'")),
+        }
+    }
+}
+
+impl LlmProvider {
+    pub fn default_base_url(self) -> &'static str {
+        match self {
+            LlmProvider::OpenRouter => DEFAULT_OPENROUTER_BASE_URL,
+            LlmProvider::Cerebras => DEFAULT_CEREBRAS_BASE_URL,
+        }
+    }
+
+    pub fn api_key_env_var(self) -> &'static str {
+        match self {
+            LlmProvider::OpenRouter => "OPENROUTER_API_KEY",
+            LlmProvider::Cerebras => "CEREBRAS_API_KEY",
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            LlmProvider::OpenRouter => "OpenRouter",
+            LlmProvider::Cerebras => "Cerebras",
         }
     }
 }
@@ -314,7 +346,12 @@ impl FileConfigV2 {
     fn apply(self, builder: ConfigBuilder) -> ConfigBuilder {
         let builder = builder.with_llm(|llm| {
             if let Some(provider) = self.llm.provider.clone() {
-                llm.provider = provider.parse().unwrap_or(LlmProvider::OpenRouter);
+                if let Ok(parsed) = provider.parse::<LlmProvider>() {
+                    if llm.provider != parsed {
+                        llm.provider = parsed;
+                        llm.base_url = parsed.default_base_url().to_string();
+                    }
+                }
             }
             if let Some(api_key) = self.llm.api_key.clone() {
                 llm.api_key = api_key;
@@ -438,8 +475,39 @@ struct PersistedRecovery {
 }
 
 fn apply_env_overrides(mut builder: ConfigBuilder) -> Result<ConfigBuilder> {
+    if let Some(provider_raw) = env_string("LI_PROVIDER")? {
+        let provider = provider_raw
+            .parse::<LlmProvider>()
+            .with_context(|| format!("Failed to parse LI_PROVIDER value '{provider_raw}'"))?;
+        builder = builder.with_llm(|llm| {
+            if llm.provider != provider {
+                llm.provider = provider;
+                llm.base_url = provider.default_base_url().to_string();
+            }
+        });
+    }
+
+    if let Some(base_url) = env_string("LI_LLM_BASE_URL")? {
+        let base_url_clone = base_url.clone();
+        builder = builder.with_llm(|llm| llm.base_url = base_url_clone.clone());
+    }
+
     if let Some(api_key) = env_string("OPENROUTER_API_KEY")? {
-        builder = builder.with_llm(|llm| llm.api_key = api_key);
+        let api_key_clone = api_key.clone();
+        builder = builder.with_llm(|llm| {
+            if llm.provider == LlmProvider::OpenRouter {
+                llm.api_key = api_key_clone.clone();
+            }
+        });
+    }
+
+    if let Some(api_key) = env_string("CEREBRAS_API_KEY")? {
+        let api_key_clone = api_key.clone();
+        builder = builder.with_llm(|llm| {
+            if llm.provider == LlmProvider::Cerebras {
+                llm.api_key = api_key_clone.clone();
+            }
+        });
     }
 
     if let Some(timeout) = env_u64("LI_TIMEOUT_SECS")? {
@@ -609,6 +677,24 @@ mod tests {
 
         let err = Config::load().unwrap_err();
         assert!(err.to_string().contains("OpenRouter API key not found"));
+    }
+
+    #[test]
+    fn load_supports_cerebras_provider() {
+        let _lock = env_lock();
+        let temp_home = TempDir::new().unwrap();
+        let home = temp_home.path().to_str().unwrap().to_string();
+
+        let _env = EnvGuard::new(&[
+            ("HOME", Some(home.as_str())),
+            ("LI_PROVIDER", Some("cerebras")),
+            ("CEREBRAS_API_KEY", Some("cb-key")),
+        ]);
+
+        let config = Config::load().unwrap();
+        assert_eq!(config.llm.provider, LlmProvider::Cerebras);
+        assert_eq!(config.llm.api_key, "cb-key");
+        assert_eq!(config.llm.base_url, DEFAULT_CEREBRAS_BASE_URL);
     }
 
     #[test]
