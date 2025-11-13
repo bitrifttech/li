@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::planner::Plan;
 use crate::validator::ValidationResult;
 

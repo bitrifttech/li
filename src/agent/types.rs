@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::fmt;
 
 /// Logical stages in the agent pipeline.
