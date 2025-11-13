@@ -34,7 +34,7 @@ Success looks like: users trust the plan preview, approve confidently, and rarel
 1. As a developer, I can run `li "make a new git repo"` and see a **plan** with commands before anything runs.
 2. As a developer, I can hit **enter** (or `y`) to execute the plan, or **n** to cancel.
 3. As a developer, I can pass `--yes` to auto-execute without a confirm prompt (explicit opt-in).
-4. As a developer, I can install an **accept-line hook** so plain English entered in my terminal routes through **li**.
+4. As a developer, I can configure providers/models so planning uses the tools I prefer.
 5. As a developer, I can see safe **dry-run** probes (where applicable) before destructive commands.
 
 ---
@@ -46,21 +46,26 @@ Success looks like: users trust the plan preview, approve confidently, and rarel
 * **Binary**: `li`
 * **Usage**:
 
-  * `li "plain english task"` → classify → plan → show plan → prompt to execute.
-  * `li install` → optional: install a zsh accept-line hook (intercepts Enter, sends input to `li` when it’s NL).
+  * `li "plain english task"` → plan → show plan → prompt to execute.
+  * `li --setup` → interactive first-time configuration (provider, API key, planner model, timeout)
+  * `li --provider` → list or interactively choose supported providers
+  * `li --model` → fetch and select free OpenRouter models; accepts `list` or `interactive`
   * `li --version`, `li --help`.
 * **Flags**:
 
   * `--yes` / `-y` : auto-approve execution.
-  * `--shell zsh|bash|fish` : override shell detection for hook install.
   * `--model qwen-235b` : override planner (debug only; default locked to 235B).
   * `--no-color` : disable colors in TUI output.
 
-### 4.2 Classifier
+### 4.2 Plan Executor
 
-* Goal: `TERMINAL` vs `NL` (natural language).
-* If `TERMINAL`: **li** returns exit code `100` so a shell hook can pass the input through unchanged.
-* If `NL`: send to planner.
+*Purpose*: Transform natural-language tasks into safe shell plans, validate prerequisites, present the plan to the user, and execute upon approval.
+
+**Responsibilities**
+- Convert goals into JSON plans (dry-run + execute commands, confidence, notes)
+- Ask clarifying questions when essential information is missing
+- Validate required tools and offer recovery flows when possible
+- Present the plan to the user for approval before execution
 
 ### 4.3 Planner
 
@@ -91,54 +96,41 @@ Success looks like: users trust the plan preview, approve confidently, and rarel
 
 ```mermaid
 flowchart LR
-  A[User input] --> B{Classifier}
-  B -- TERMINAL --> C[Exit code 100 → shell passes through]
-  B -- NL --> D[Planner (Qwen3-235B)]
-  D --> E[Plan JSON]
-  E --> F[Plan Preview (TUI/CLI)]
-  F -- Approve --> G[Executor: std::process::Command]
-  F -- Reject --> H[Exit]
+  A[User input] --> B[Planner]
+  B --> C{Clarification needed?}
+  C -- Yes --> D[Ask follow-up]
+  D --> B
+  C -- No --> E[Validation]
+  E --> F{Missing tools?}
+  F -- Yes --> G[Recovery]
+  G --> E
+  F -- No --> H[Show plan to user]
+  H --> I{Approve?}
+  I -- Yes --> J[Execute]
+  I -- No --> K[Abort]
+  J --> L{Success?}
+  L -- Yes --> M[Done]
+  L -- No --> N[Report failure]
 ```
 
 ---
 
 ## 7) Model Policy (v1)
 
-* **Classifier**: small prompt to force **exact JSON** with only `{"type":"NL"}` or `{"type":"TERMINAL"}`.
 * **Planner**: **Qwen3-235B (thinking)**, strict JSON schema, safety guidelines in prompt (prefer dry-run/idempotent; never destructive without prior check).
+* **Recovery Agent**: Lightweight instructions to suggest tool installation or safe alternatives when validation fails.
 * **No codegen**: If the task actually requires code, planner should answer with a plan that **exits early** and suggests a follow-up (“This requires code; not supported in v1.”).
 
 ---
 
 ## 8) Prompts & Schemas
 
-### 8.1 Classifier — System Prompt
+### 8.1 Planner Safety Guardrails
 
-> You are part of a CLI terminal system where users mix natural language with shell commands.
-> Your job: output **only** a JSON object with the key `"type"` and value `"NL"` or `"TERMINAL"`.
-> If the input is plain English intent, output `"NL"`.
-> If the input is a valid shell command sequence to run as-is, output `"TERMINAL"`.
-> Output **exactly** one JSON object, no extra keys, no prose.
-
-**User content example**
-
-```
-{input}
-```
-
-**Expected output**
-
-```json
-{"type":"NL"}
-```
-
-or
-
-```json
-{"type":"TERMINAL"}
-```
-
-*(Rust will validate with a one-field JSON schema and reject anything else.)*
+The planner prompt enforces:
+- Idempotent dry-run commands before mutations
+- Explicit JSON schema compliance (no additional keys, no prose)
+- Notes field to capture assumptions, portability warnings, or unsupported tasks
 
 ---
 
@@ -213,19 +205,26 @@ Plan (approve? y/N):
 [y/N]:
 ```
 
-### 9.2 Hook install (optional)
+---
+
+### 9.2 CLI Flags & UX Notes
 
 ```
-$ li install
-→ Detect shell: zsh
-→ Install accept-line widget and bindkey? [y/N]
-→ Installed. Tip: press Enter as usual; plain English routes through li.
+$ li "make a new git repo"
+Plan (approve? y/N):
+  Dry-run:
+    • git status
+  Will execute:
+    1. git init
+    2. git add .
+    3. git commit -m "Initial commit"
+[y/N]:
 ```
 
-* Hook behavior:
-
-  * If **classifier = TERMINAL** → return 100; shell executes input normally.
-  * If **classifier = NL** → open li’s plan preview.
+- `--yes` auto-approves plan execution.
+- `--provider` lets users switch between OpenRouter and Cerebras.
+- `--model` (OpenRouter only) fetches free models for interactive selection.
+- `--verbose` streams raw LLM requests/responses for debugging.
 
 ---
 
@@ -304,32 +303,36 @@ brew install li
 ```
 src/
   main.rs
-  cli.rs                 # flags, subcommands
-  classifier/
+  cli/
     mod.rs
-    prompt.rs
+    runtime.rs
+  agent/
+    mod.rs
+    adapters.rs
+    context.rs
+    orchestrator.rs
+    outcome.rs
+    stages.rs
     types.rs
-    client.rs
+  client.rs
+  config.rs
+  exec/
+    mod.rs
   planner/
     mod.rs
-    prompt.rs
-    schema.rs            # JSON schema (serde types)
-    client.rs
-  exec/
-    mod.rs               # command runner, streaming I/O
-    shell.rs             # detection, env
-  hook/
-    zsh.rs               # install/uninstall accept-line hook
-  config.rs
-  errors.rs
+  recovery/
+    mod.rs
+  tokens.rs
+  validator/
+    mod.rs
 ```
 
 ---
 
 ## 14) Error Handling
 
-* **Classifier malformed JSON** → one retry, then fall back: treat input as TERMINAL (code 100).
 * **Planner malformed JSON** → one retry; on failure, show message “Couldn’t create a safe plan.”
+* **Validation failure** → stop and show missing tools (optionally prompt for recovery if enabled).
 * **Execution failure** → stop on first non-zero; show offending command and exit code.
 
 ---
@@ -338,14 +341,13 @@ src/
 
 ### 15.1 Unit
 
-* Classifier: enforce single-field JSON, reject extras.
 * Planner: validate against schema; reject additional properties.
+* Recovery: ensure menu options render correctly and commands are validated.
 
 ### 15.2 Integration
 
 * “Make a new git repo” → expected dry-run + execute list.
 * “List big files” → uses `du`/`ls` correctly across macOS/Linux.
-* Hook path: NL routes to planner; TERMINAL passthrough with code 100.
 
 ### 15.3 Manual
 
@@ -365,15 +367,14 @@ src/
 
 ### v1.0 (this PRD)
 
-* Classify → Plan → Approve → Execute
+* Plan → Approve → Execute
 * OpenRouter MiniMax M2 planner
-* Optional zsh hook
 * Homebrew packaging
 
 ### v1.1
 
-* Bash/Fish hooks
 * Better portability shims (e.g., BSD vs GNU utilities)
+* Enhanced validation heuristics
 
 ### v2.0 (post-MVP ideas)
 
@@ -381,3 +382,6 @@ src/
 * Quick **recipes/plugins** (git, docker, brew, aws).
 * Local model fallback.
 * Rich diffs (e.g., `git` previews, file change summaries).
+* Future enhancements:
+  * Provider selection extensions (Azure OpenAI, Anthropic)
+  * Offline cache of popular command templates

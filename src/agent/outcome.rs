@@ -39,9 +39,6 @@ pub enum RecoveryOutcome {
 /// Terminal result returned by the agent orchestrator.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AgentOutcome {
-    DirectCommand {
-        command: String,
-    },
     Planned {
         plan: Option<Plan>,
         validation: Option<ValidationResult>,

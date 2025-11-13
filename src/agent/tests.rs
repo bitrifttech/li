@@ -24,7 +24,6 @@ fn sample_config() -> Config {
             user_agent: "li/test".to_string(),
         },
         models: ModelSettings {
-            classifier: "classifier/model".to_string(),
             planner: "planner/model".to_string(),
             max_tokens: 512,
         },
@@ -55,25 +54,25 @@ impl AgentStage for RecordingStage {
     }
 }
 
-struct FinishStage {
-    kind: StageKind,
-}
-
-impl FinishStage {
-    fn new(kind: StageKind) -> Self {
-        Self { kind }
-    }
-}
+struct FinishStage;
 
 #[async_trait]
 impl AgentStage for FinishStage {
     fn kind(&self) -> StageKind {
-        self.kind
+        StageKind::Planning
     }
 
     async fn execute(&self, _context: &mut AgentContext) -> Result<StageOutcome> {
-        Ok(StageOutcome::Finished(AgentOutcome::DirectCommand {
-            command: "echo hi".to_string(),
+        Ok(StageOutcome::Finished(AgentOutcome::Planned {
+            plan: Some(Plan {
+                confidence: 0.5,
+                dry_run_commands: vec![],
+                execute_commands: vec![],
+                notes: String::new(),
+            }),
+            validation: None,
+            execution: None,
+            recovery: None,
         }))
     }
 }
@@ -104,11 +103,8 @@ async fn orchestrator_runs_stages_in_order() {
     let events = Arc::new(Mutex::new(Vec::new()));
 
     let orchestrator = AgentOrchestrator::builder()
-        .add_stage(RecordingStage::new(
-            StageKind::Classification,
-            events.clone(),
-        ))
         .add_stage(RecordingStage::new(StageKind::Planning, events.clone()))
+        .add_stage(RecordingStage::new(StageKind::Validation, events.clone()))
         .build();
 
     let run = orchestrator
@@ -118,13 +114,10 @@ async fn orchestrator_runs_stages_in_order() {
 
     assert!(matches!(run.outcome, AgentOutcome::Planned { .. }));
     let recorded = events.lock().unwrap().clone();
-    assert_eq!(
-        recorded,
-        vec![StageKind::Classification, StageKind::Planning]
-    );
+    assert_eq!(recorded, vec![StageKind::Planning, StageKind::Validation]);
     assert!(matches!(
         run.events[..],
-        [AgentEvent::StageStarted(StageKind::Classification), ..]
+        [AgentEvent::StageStarted(StageKind::Planning), ..]
     ));
 }
 
@@ -133,8 +126,8 @@ async fn orchestrator_stops_when_stage_finishes() {
     let events = Arc::new(Mutex::new(Vec::new()));
 
     let orchestrator = AgentOrchestrator::builder()
-        .add_stage(FinishStage::new(StageKind::Classification))
-        .add_stage(RecordingStage::new(StageKind::Planning, events.clone()))
+        .add_stage(FinishStage)
+        .add_stage(RecordingStage::new(StageKind::Validation, events.clone()))
         .build();
 
     let run = orchestrator
@@ -142,7 +135,7 @@ async fn orchestrator_stops_when_stage_finishes() {
         .await
         .expect("orchestrator should succeed");
 
-    assert!(matches!(run.outcome, AgentOutcome::DirectCommand { .. }));
+    assert!(matches!(run.outcome, AgentOutcome::Planned { .. }));
     assert!(events.lock().unwrap().is_empty());
 }
 
@@ -169,7 +162,7 @@ async fn orchestrator_reports_failures() {
 #[test]
 fn default_orchestrator_has_standard_stages() {
     let orchestrator = AgentOrchestrator::default();
-    assert_eq!(orchestrator.stage_count(), 5);
+    assert_eq!(orchestrator.stage_count(), 4);
 }
 
 #[tokio::test]
@@ -177,48 +170,28 @@ async fn plan_execution_adapter_skips_when_validation_blocks() {
     let mut context = AgentContext::new(sample_config(), AgentRequest::new("list files"));
     context.validation = Some(ValidationResult {
         missing_commands: vec![MissingCommand {
-            command: "fakecmd".to_string(),
-            failed_command_line: "fakecmd --version".to_string(),
+            command: "foo".to_string(),
+            failed_command_line: "foo".to_string(),
             plan_step: 0,
-            is_dry_run: true,
+            is_dry_run: false,
         }],
         plan_can_continue: false,
     });
-
     let adapter = PlanExecutionAdapter::default();
+
     let report = adapter
-        .execute(&mut context, &empty_plan())
+        .execute(
+            &mut context,
+            &Plan {
+                confidence: 0.0,
+                dry_run_commands: vec![],
+                execute_commands: vec!["foo".to_string()],
+                notes: String::new(),
+            },
+        )
         .await
         .expect("execution should succeed");
 
     assert!(!report.success);
     assert!(report.notes.iter().any(|note| note.contains("blocked")));
-}
-
-#[tokio::test]
-async fn plan_execution_adapter_runs_when_assumed_yes() {
-    let mut context = AgentContext::new(sample_config(), AgentRequest::new("echo hi"));
-    context.request.assume_yes = true;
-    context.validation = Some(ValidationResult {
-        missing_commands: Vec::new(),
-        plan_can_continue: true,
-    });
-
-    let adapter = PlanExecutionAdapter::default();
-    let report = adapter
-        .execute(&mut context, &empty_plan())
-        .await
-        .expect("execution should succeed");
-
-    assert!(report.success);
-    assert!(report.notes.is_empty());
-}
-
-fn empty_plan() -> Plan {
-    Plan {
-        confidence: 0.5,
-        dry_run_commands: Vec::new(),
-        execute_commands: Vec::new(),
-        notes: String::new(),
-    }
 }

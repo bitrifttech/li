@@ -4,14 +4,13 @@ use crate::client::{
 };
 use crate::config::{Config, DEFAULT_MAX_TOKENS, LlmProvider};
 use crate::exec;
+use crate::planner;
 use crate::recovery::{RecoveryContext, RecoveryEngine, RecoveryResult};
 use crate::validator::ValidationResult;
-use crate::{classifier, planner};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
 use serde::Deserialize;
 use std::io::{self, Write};
-use std::process;
 use std::str::FromStr;
 
 const CONTEXT_HEADROOM_TOKENS: usize = 1024;
@@ -243,21 +242,15 @@ async fn configure_openrouter_setup(config: &mut Config, api_key: &str) -> Resul
         println!("  {}. {}{}", idx + 1, model.name, context_len);
     }
 
-    let classifier_index = prompt_model_index(
-        &models,
-        "\n🧠 Select classifier model (determines if input is a command or needs planning): ",
-    )?;
     let planner_index = prompt_model_index(
         &models,
         "\n📋 Select planner model (creates shell commands from natural language): ",
     )?;
 
-    let classifier_model = models[classifier_index].id.clone();
     let planner_selection = &models[planner_index];
     let planner_model = planner_selection.id.clone();
     let derived_max_tokens = derive_max_tokens(planner_selection.context_length);
 
-    config.models.classifier = classifier_model;
     config.models.planner = planner_model;
     config.models.max_tokens = derived_max_tokens;
 
@@ -268,12 +261,9 @@ fn configure_cerebras_setup(config: &mut Config) -> Result<()> {
     println!("\nℹ️  Cerebras setup requires entering model identifiers manually.");
     println!("   Refer to your Cerebras deployment documentation for model IDs.\n");
 
-    let default_classifier = config.models.classifier.clone();
     let default_planner = config.models.planner.clone();
     let default_max_tokens = config.models.max_tokens;
 
-    config.models.classifier =
-        prompt_string_with_default("🧠 Enter classifier model ID", &default_classifier)?;
     config.models.planner =
         prompt_string_with_default("📋 Enter planner model ID", &default_planner)?;
     config.models.max_tokens = prompt_u32_with_default(
@@ -356,10 +346,6 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 
-    /// Enable classification before planning (use in shell hook mode)
-    #[arg(short = 'c', long = "classify")]
-    pub classify: bool,
-
     /// Override the model (for OpenRouter, fetches free models list)
     #[arg(short = 'm', long = "model", num_args = 0..=1, default_missing_value = "")]
     pub model: Option<String>,
@@ -403,10 +389,6 @@ pub struct Cli {
     /// Set max tokens
     #[arg(long)]
     pub max_tokens: Option<u32>,
-
-    /// Set classifier model
-    #[arg(long)]
-    pub classifier_model: Option<String>,
 
     /// Set planner model
     #[arg(long)]
@@ -463,7 +445,6 @@ impl Cli {
             && self.api_key.is_none()
             && self.timeout.is_none()
             && self.max_tokens.is_none()
-            && self.classifier_model.is_none()
             && self.planner_model.is_none()
         {
             // Check if config file exists
@@ -496,7 +477,6 @@ impl Cli {
             println!(
                 "   li --chat 'what is the capital of France?'         # Direct AI conversation"
             );
-            println!("   li --classify 'git status'                         # Classify input only");
             println!(
                 "   li -i 'df -h'                                      # Explain command output with AI"
             );
@@ -522,9 +502,6 @@ impl Cli {
                 "   li --config --timeout 60                           # Set timeout in seconds"
             );
             println!("   li --config --max-tokens 4096                      # Set max tokens");
-            println!(
-                "   li --config --classifier-model MODEL               # Set classifier model"
-            );
             println!("   li --config --planner-model MODEL                  # Set planner model");
             println!();
 
@@ -538,7 +515,6 @@ impl Cli {
                             loaded_config.llm.provider,
                             loaded_config.llm.provider.display_name()
                         );
-                        println!("   Classifier: {}", loaded_config.models.classifier);
                         println!("   Planner: {}", loaded_config.models.planner);
                         println!("   Timeout: {}s", loaded_config.llm.timeout_secs);
                         println!();
@@ -678,7 +654,7 @@ impl Cli {
                 }
                 return Ok(());
             } else if model_arg == "interactive" || model_arg.is_empty() {
-                // Interactive selection for both classifier and planner models
+                // Interactive selection for planner model
                 println!("\n🤖 Available Free Models:\n");
                 for (idx, model) in models.iter().enumerate() {
                     let context_len = model
@@ -688,35 +664,6 @@ impl Cli {
                     println!("  {}. {}{}", idx + 1, model.name, context_len);
                 }
 
-                // Get classifier model
-                let classifier_index = loop {
-                    print!(
-                        "\n🧠 Select classifier model (determines if input is a command or needs planning): "
-                    );
-                    io::stdout().flush()?;
-
-                    let mut input = String::new();
-                    io::stdin().read_line(&mut input)?;
-                    let choice = input.trim();
-
-                    if choice.is_empty() {
-                        println!("❌ Please select a model number.");
-                        continue;
-                    }
-
-                    match choice.parse::<usize>() {
-                        Ok(num) if num >= 1 && num <= models.len() => {
-                            break num - 1;
-                        }
-                        Ok(_) => {
-                            println!("❌ Please enter a number between 1 and {}.", models.len())
-                        }
-                        Err(_) => println!("❌ Please enter a valid number."),
-                    }
-                };
-                let classifier_model = models[classifier_index].id.clone();
-
-                // Get planner model
                 let planner_index = loop {
                     print!(
                         "\n📋 Select planner model (creates shell commands from natural language): "
@@ -747,7 +694,6 @@ impl Cli {
                 let derived_max_tokens = derive_max_tokens(planner_selection.context_length);
 
                 // Update config
-                config.models.classifier = classifier_model.clone();
                 config.models.planner = planner_model.clone();
                 config.models.max_tokens = derived_max_tokens;
 
@@ -758,7 +704,6 @@ impl Cli {
                     Config::config_path()?.display()
                 );
                 println!("📋 Updated configuration:");
-                println!("   Classifier Model: {}", config.models.classifier);
                 println!("   Planner Model: {}", config.models.planner);
                 println!("   Max Tokens: {}", config.models.max_tokens);
 
@@ -775,7 +720,6 @@ impl Cli {
                     config.models.max_tokens = derive_max_tokens(selected.context_length);
                 }
                 config.models.planner = model_arg.clone();
-                config.models.classifier = model_arg.clone();
             }
         }
 
@@ -790,7 +734,6 @@ impl Cli {
             || self.api_key.is_some()
             || self.timeout.is_some()
             || self.max_tokens.is_some()
-            || self.classifier_model.is_some()
             || self.planner_model.is_some()
         {
             handle_config_direct(&self, &mut config).await?;
@@ -799,7 +742,7 @@ impl Cli {
 
         match self.command {
             Some(Command::Chat(args)) => handle_chat(args, &config).await?,
-            None => handle_task(self.task, self.classify, &config).await?,
+            None => handle_task(self.task, &config).await?,
         }
         Ok(())
     }
@@ -843,7 +786,7 @@ async fn handle_chat(args: ChatArgs, config: &Config) -> Result<()> {
     Ok(())
 }
 
-async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Result<()> {
+async fn handle_task(words: Vec<String>, config: &Config) -> Result<()> {
     let prompt = words.join(" ").trim().to_owned();
     if prompt.is_empty() {
         println!(
@@ -852,24 +795,8 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
         return Ok(());
     }
 
-    if classify {
-        let client = AIClient::new(&config.llm)?;
-        let classification =
-            classifier::classify(&client, &prompt, &config.models.classifier).await?;
-
-        println!("Provider: {}", config.llm.provider.display_name());
-        println!("Classifier Model: {}", config.models.classifier);
-        println!("Classification: {}", classification_label(classification));
-
-        match classification {
-            classifier::Classification::NaturalLanguage => return Ok(()),
-            classifier::Classification::Terminal => process::exit(100),
-        }
-    }
-
     let orchestrator = AgentOrchestrator::default();
-    let mut request = AgentRequest::new(prompt.clone());
-    request.classify = classify;
+    let request = AgentRequest::new(prompt.clone());
 
     let run = orchestrator
         .run(config.clone(), request)
@@ -877,14 +804,6 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
         .context("Agent pipeline failed")?;
 
     match run.outcome {
-        AgentOutcome::DirectCommand { command } => {
-            println!("Executing direct terminal command: {}", command);
-            let success = exec::run_command(&command).await?;
-            if !success {
-                bail!("Command failed: {}", command);
-            }
-            Ok(())
-        }
         AgentOutcome::Planned {
             plan: Some(plan),
             validation,
@@ -933,7 +852,7 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
         }
         AgentOutcome::Failed { stage, error } => {
             let guidance = match stage {
-                StageKind::Classification | StageKind::Planning => format!(
+                StageKind::Planning => format!(
                     "Verify your {} API key (set {} or run 'li --setup') and ensure you have internet connectivity. Retry if the service is rate limited.",
                     config.llm.provider.display_name(),
                     config.llm.provider.api_key_env_var()
@@ -951,10 +870,27 @@ async fn handle_task(words: Vec<String>, classify: bool, config: &Config) -> Res
     }
 }
 
-fn classification_label(classification: classifier::Classification) -> &'static str {
-    match classification {
-        classifier::Classification::NaturalLanguage => "natural language",
-        classifier::Classification::Terminal => "terminal command",
+fn render_plan(plan: &planner::Plan, config: &Config) {
+    println!("\nProvider: {}", config.llm.provider.display_name());
+    println!("Model: {}", config.models.planner);
+    println!("Plan confidence: {:.2}", plan.confidence);
+
+    if !plan.dry_run_commands.is_empty() {
+        println!("\nDry-run Commands:");
+        for (idx, cmd) in plan.dry_run_commands.iter().enumerate() {
+            println!("  {}. {}", idx + 1, cmd);
+        }
+    }
+
+    if !plan.execute_commands.is_empty() {
+        println!("\nExecute Commands:");
+        for (idx, cmd) in plan.execute_commands.iter().enumerate() {
+            println!("  {}. {}", idx + 1, cmd);
+        }
+    }
+
+    if !plan.notes.trim().is_empty() {
+        println!("\nNotes: {}", plan.notes.trim());
     }
 }
 
@@ -1068,30 +1004,6 @@ async fn resolve_validation_issues(
     Ok(false)
 }
 
-fn render_plan(plan: &planner::Plan, config: &Config) {
-    println!("\nProvider: {}", config.llm.provider.display_name());
-    println!("Model: {}", config.models.planner);
-    println!("Plan confidence: {:.2}", plan.confidence);
-
-    if !plan.dry_run_commands.is_empty() {
-        println!("\nDry-run Commands:");
-        for (idx, cmd) in plan.dry_run_commands.iter().enumerate() {
-            println!("  {}. {}", idx + 1, cmd);
-        }
-    }
-
-    if !plan.execute_commands.is_empty() {
-        println!("\nExecute Commands:");
-        for (idx, cmd) in plan.execute_commands.iter().enumerate() {
-            println!("  {}. {}", idx + 1, cmd);
-        }
-    }
-
-    if !plan.notes.trim().is_empty() {
-        println!("\nNotes: {}", plan.notes.trim());
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ApprovalResponse {
     Yes,
@@ -1143,10 +1055,6 @@ async fn handle_config_direct(args: &Cli, config: &mut Config) -> Result<()> {
         existing_config.models.max_tokens = max_tokens;
     }
 
-    if let Some(ref classifier_model) = args.classifier_model {
-        existing_config.models.classifier = classifier_model.clone();
-    }
-
     let mut planner_model_context_tokens: Option<u32> = None;
 
     if let Some(ref planner_model) = args.planner_model {
@@ -1179,14 +1087,12 @@ async fn handle_config_direct(args: &Cli, config: &mut Config) -> Result<()> {
     );
     println!("📋 Current configuration:");
     println!(
-        "   Provider: {} ({})",
-        existing_config.llm.provider,
+        "   Provider: {}",
         existing_config.llm.provider.display_name()
     );
     println!("   API Key: {}", truncated_key);
     println!("   Timeout: {}s", existing_config.llm.timeout_secs);
     println!("   Max Tokens: {}", existing_config.models.max_tokens);
-    println!("   Classifier Model: {}", existing_config.models.classifier);
     println!("   Planner Model: {}", existing_config.models.planner);
 
     Ok(())
@@ -1228,7 +1134,6 @@ async fn handle_setup() -> Result<()> {
     println!("   Base URL: {}", config.llm.base_url);
     println!("   Timeout: {}s", config.llm.timeout_secs);
     println!("   Max Tokens: {}", config.models.max_tokens);
-    println!("   Classifier Model: {}", config.models.classifier);
     println!("   Planner Model: {}", config.models.planner);
     println!("\n🎉 Setup complete! You can now use 'li' with commands like:");
     println!("   li 'list all files in current directory'");

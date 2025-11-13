@@ -9,7 +9,6 @@ use std::{
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 pub(crate) const DEFAULT_MAX_TOKENS: u32 = 2048;
-const DEFAULT_CLASSIFIER_MODEL: &str = "nvidia/nemotron-nano-12b-v2-vl:free";
 const DEFAULT_PLANNER_MODEL: &str = "minimax/minimax-m2:free";
 const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 const DEFAULT_CEREBRAS_BASE_URL: &str = "https://api.cerebras.ai/v1";
@@ -177,7 +176,6 @@ impl LlmProvider {
 
 #[derive(Debug, Clone)]
 pub struct ModelSettings {
-    pub classifier: String,
     pub planner: String,
     pub max_tokens: u32,
 }
@@ -185,7 +183,6 @@ pub struct ModelSettings {
 impl Default for ModelSettings {
     fn default() -> Self {
         Self {
-            classifier: DEFAULT_CLASSIFIER_MODEL.to_string(),
             planner: DEFAULT_PLANNER_MODEL.to_string(),
             max_tokens: DEFAULT_MAX_TOKENS,
         }
@@ -305,7 +302,6 @@ struct FileConfigV1 {
     openrouter_api_key: Option<String>,
     timeout_secs: Option<u64>,
     max_tokens: Option<u32>,
-    classifier_model: Option<String>,
     planner_model: Option<String>,
 }
 
@@ -323,9 +319,6 @@ impl FileConfigV1 {
             .with_models(|models| {
                 if let Some(max_tokens) = self.max_tokens {
                     models.max_tokens = max_tokens;
-                }
-                if let Some(classifier) = self.classifier_model.clone() {
-                    models.classifier = classifier;
                 }
                 if let Some(planner) = self.planner_model.clone() {
                     models.planner = planner;
@@ -368,9 +361,6 @@ impl FileConfigV2 {
         });
 
         let builder = builder.with_models(|models| {
-            if let Some(classifier) = self.models.classifier.clone() {
-                models.classifier = classifier;
-            }
             if let Some(planner) = self.models.planner.clone() {
                 models.planner = planner;
             }
@@ -408,7 +398,6 @@ struct FileLlmSettings {
 
 #[derive(Debug, Deserialize)]
 struct FileModelSettings {
-    classifier: Option<String>,
     planner: Option<String>,
     max_tokens: Option<u32>,
 }
@@ -438,7 +427,6 @@ impl<'a> From<&'a Config> for PersistedConfig<'a> {
                 user_agent: &config.llm.user_agent,
             },
             models: PersistedModels {
-                classifier: &config.models.classifier,
                 planner: &config.models.planner,
                 max_tokens: config.models.max_tokens,
             },
@@ -462,7 +450,6 @@ struct PersistedLlm<'a> {
 
 #[derive(Serialize)]
 struct PersistedModels<'a> {
-    classifier: &'a str,
     planner: &'a str,
     max_tokens: u32,
 }
@@ -488,24 +475,21 @@ fn apply_env_overrides(mut builder: ConfigBuilder) -> Result<ConfigBuilder> {
     }
 
     if let Some(base_url) = env_string("LI_LLM_BASE_URL")? {
-        let base_url_clone = base_url.clone();
-        builder = builder.with_llm(|llm| llm.base_url = base_url_clone.clone());
+        builder = builder.with_llm(|llm| llm.base_url = base_url.clone());
     }
 
     if let Some(api_key) = env_string("OPENROUTER_API_KEY")? {
-        let api_key_clone = api_key.clone();
         builder = builder.with_llm(|llm| {
             if llm.provider == LlmProvider::OpenRouter {
-                llm.api_key = api_key_clone.clone();
+                llm.api_key = api_key.clone();
             }
         });
     }
 
     if let Some(api_key) = env_string("CEREBRAS_API_KEY")? {
-        let api_key_clone = api_key.clone();
         builder = builder.with_llm(|llm| {
             if llm.provider == LlmProvider::Cerebras {
-                llm.api_key = api_key_clone.clone();
+                llm.api_key = api_key.clone();
             }
         });
     }
@@ -516,10 +500,6 @@ fn apply_env_overrides(mut builder: ConfigBuilder) -> Result<ConfigBuilder> {
 
     if let Some(max_tokens) = env_u32("LI_MAX_TOKENS")? {
         builder = builder.with_models(|models| models.max_tokens = max_tokens);
-    }
-
-    if let Some(classifier) = env_string("LI_CLASSIFIER_MODEL")? {
-        builder = builder.with_models(|models| models.classifier = classifier);
     }
 
     if let Some(planner) = env_string("LI_PLANNER_MODEL")? {
@@ -612,7 +592,6 @@ mod tests {
             ("OPENROUTER_API_KEY", Some("env-key")),
             ("LI_TIMEOUT_SECS", Some("45")),
             ("LI_MAX_TOKENS", Some("4096")),
-            ("LI_CLASSIFIER_MODEL", Some("env-classifier")),
             ("LI_PLANNER_MODEL", Some("env-planner")),
         ]);
 
@@ -620,7 +599,6 @@ mod tests {
         assert_eq!(config.llm.api_key, "env-key");
         assert_eq!(config.llm.timeout_secs, 45);
         assert_eq!(config.models.max_tokens, 4096);
-        assert_eq!(config.models.classifier, "env-classifier");
         assert_eq!(config.models.planner, "env-planner");
     }
 
@@ -637,7 +615,6 @@ mod tests {
                 "openrouter_api_key": "file-key",
                 "timeout_secs": 20,
                 "max_tokens": 1024,
-                "classifier_model": "file-classifier",
                 "planner_model": "file-planner"
             }"#,
         )
@@ -648,7 +625,6 @@ mod tests {
             ("OPENROUTER_API_KEY", Some("env-key")),
             ("LI_TIMEOUT_SECS", Some("40")),
             ("LI_MAX_TOKENS", None),
-            ("LI_CLASSIFIER_MODEL", None),
             ("LI_PLANNER_MODEL", Some("env-planner")),
         ]);
 
@@ -656,7 +632,6 @@ mod tests {
         assert_eq!(config.llm.api_key, "env-key");
         assert_eq!(config.llm.timeout_secs, 40);
         assert_eq!(config.models.max_tokens, 1024);
-        assert_eq!(config.models.classifier, "file-classifier");
         assert_eq!(config.models.planner, "env-planner");
     }
 
@@ -671,7 +646,6 @@ mod tests {
             ("OPENROUTER_API_KEY", None),
             ("LI_TIMEOUT_SECS", None),
             ("LI_MAX_TOKENS", None),
-            ("LI_CLASSIFIER_MODEL", None),
             ("LI_PLANNER_MODEL", None),
         ]);
 
@@ -709,6 +683,7 @@ mod tests {
         config.llm.api_key = "test-key".to_string();
         config.llm.timeout_secs = 55;
         config.models.max_tokens = 999;
+        config.models.planner = "custom/planner".to_string();
         config.recovery.enabled = true;
         config.recovery.preference = RecoveryPreference::SkipOnError;
         config.recovery.auto_install = true;
@@ -718,6 +693,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&persisted).unwrap();
         assert_eq!(json["llm"]["api_key"], "test-key");
         assert_eq!(json["llm"]["timeout_secs"], 55);
+        assert_eq!(json["models"]["planner"], "custom/planner");
         assert_eq!(json["models"]["max_tokens"], 999);
         assert_eq!(json["recovery"]["enabled"], true);
         assert_eq!(json["recovery"]["preference"], "skip-on-error");

@@ -5,7 +5,6 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::classifier::{self, Classification};
 use crate::client::{DefaultLlmClientFactory, LlmClientFactory};
 use crate::exec;
 use crate::planner::{self, Plan};
@@ -13,11 +12,6 @@ use crate::validator::{self, ValidationResult};
 
 use super::context::AgentContext;
 use super::outcome::{ExecutionReport, RecoveryOutcome};
-
-#[async_trait]
-pub trait ClassificationAdapter {
-    async fn classify(&self, context: &mut AgentContext) -> Result<Classification>;
-}
 
 #[async_trait]
 pub trait PlanningAdapter {
@@ -37,36 +31,6 @@ pub trait ExecutionAdapter {
 #[async_trait]
 pub trait RecoveryAdapter {
     async fn recover(&self, context: &mut AgentContext) -> Result<RecoveryOutcome>;
-}
-
-/// Adapter that invokes the existing classifier module with a shared LLM client.
-pub struct DirectClassifierAdapter {
-    factory: Arc<dyn LlmClientFactory>,
-}
-
-impl DirectClassifierAdapter {
-    pub fn new(factory: Arc<dyn LlmClientFactory>) -> Self {
-        Self { factory }
-    }
-}
-
-impl Default for DirectClassifierAdapter {
-    fn default() -> Self {
-        Self::new(Arc::new(DefaultLlmClientFactory::default()))
-    }
-}
-
-#[async_trait]
-impl ClassificationAdapter for DirectClassifierAdapter {
-    async fn classify(&self, context: &mut AgentContext) -> Result<Classification> {
-        let client = context.llm_client(self.factory.as_ref())?;
-        classifier::classify(
-            client.as_ref(),
-            &context.request.task,
-            &context.config.models.classifier,
-        )
-        .await
-    }
 }
 
 /// Adapter that invokes the existing planner module.

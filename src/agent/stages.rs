@@ -5,11 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::classifier::Classification;
-
-use super::adapters::{
-    ClassificationAdapter, ExecutionAdapter, PlanningAdapter, RecoveryAdapter, ValidationAdapter,
-};
+use super::adapters::{ExecutionAdapter, PlanningAdapter, RecoveryAdapter, ValidationAdapter};
 use super::context::AgentContext;
 use super::outcome::AgentOutcome;
 use super::types::StageKind;
@@ -26,47 +22,6 @@ pub trait AgentStage: Send + Sync {
     fn kind(&self) -> StageKind;
 
     async fn execute(&self, context: &mut AgentContext) -> Result<StageOutcome>;
-}
-
-pub struct ClassificationStage<A> {
-    adapter: Arc<A>,
-}
-
-impl<A> ClassificationStage<A> {
-    pub fn new(adapter: A) -> Self {
-        Self {
-            adapter: Arc::new(adapter),
-        }
-    }
-}
-
-#[async_trait]
-impl<A> AgentStage for ClassificationStage<A>
-where
-    A: ClassificationAdapter + Send + Sync + 'static,
-{
-    fn kind(&self) -> StageKind {
-        StageKind::Classification
-    }
-
-    async fn execute(&self, context: &mut AgentContext) -> Result<StageOutcome> {
-        if !context.request.classify {
-            context.record_stage_skip(self.kind(), "classification disabled");
-            return Ok(StageOutcome::Continue);
-        }
-
-        let classification = self.adapter.classify(context).await?;
-        context.record_classification(classification.clone());
-
-        if matches!(classification, Classification::Terminal) {
-            context.mark_direct_command(context.request.task.clone());
-            return Ok(StageOutcome::Finished(AgentOutcome::DirectCommand {
-                command: context.request.task.clone(),
-            }));
-        }
-
-        Ok(StageOutcome::Continue)
-    }
 }
 
 pub struct PlanningStage<P> {
@@ -91,11 +46,6 @@ where
     }
 
     async fn execute(&self, context: &mut AgentContext) -> Result<StageOutcome> {
-        if context.direct_command().is_some() {
-            context.record_stage_skip(self.kind(), "direct command requires no plan");
-            return Ok(StageOutcome::Continue);
-        }
-
         let plan = self.adapter.plan(context).await?;
         context.record_plan(plan);
         Ok(StageOutcome::Continue)

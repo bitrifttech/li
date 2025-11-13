@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::classifier::Classification;
 use crate::client::{DynLlmClient, LlmClientFactory};
 use crate::config::Config;
 use crate::planner::Plan;
@@ -18,7 +17,6 @@ use super::types::StageKind;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentRequest {
     pub task: String,
-    pub classify: bool,
     pub intelligence: bool,
     pub intelligence_question: Option<String>,
     pub assume_yes: bool,
@@ -28,7 +26,6 @@ impl AgentRequest {
     pub fn new(task: impl Into<String>) -> Self {
         Self {
             task: task.into(),
-            classify: true,
             intelligence: false,
             intelligence_question: None,
             assume_yes: false,
@@ -45,13 +42,11 @@ impl AgentRequest {
 pub struct AgentContext {
     pub config: Config,
     pub request: AgentRequest,
-    pub classification: Option<Classification>,
     pub plan: Option<Plan>,
     pub validation: Option<ValidationResult>,
     pub execution: Option<ExecutionReport>,
     pub recovery: Option<RecoveryOutcome>,
     events: Vec<AgentEvent>,
-    direct_command: Option<String>,
     llm_client: Option<Arc<DynLlmClient>>,
 }
 
@@ -59,13 +54,11 @@ impl fmt::Debug for AgentContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AgentContext")
             .field("request", &self.request)
-            .field("classification", &self.classification)
             .field("plan", &self.plan)
             .field("validation", &self.validation)
             .field("execution", &self.execution)
             .field("recovery", &self.recovery)
             .field("events", &self.events)
-            .field("direct_command", &self.direct_command)
             .finish()
     }
 }
@@ -75,13 +68,11 @@ impl AgentContext {
         Self {
             config,
             request,
-            classification: None,
             plan: None,
             validation: None,
             execution: None,
             recovery: None,
             events: Vec::new(),
-            direct_command: None,
             llm_client: None,
         }
     }
@@ -129,11 +120,6 @@ impl AgentContext {
         });
     }
 
-    pub fn record_classification(&mut self, classification: Classification) {
-        self.classification = Some(classification.clone());
-        self.record_event(AgentEvent::ClassificationReady(classification));
-    }
-
     pub fn record_plan(&mut self, plan: Plan) {
         let confidence = plan.confidence;
         self.plan = Some(plan);
@@ -160,14 +146,6 @@ impl AgentContext {
         self.record_event(AgentEvent::RecoveryFinished { outcome });
     }
 
-    pub fn mark_direct_command(&mut self, command: impl Into<String>) {
-        self.direct_command = Some(command.into());
-    }
-
-    pub fn direct_command(&self) -> Option<&str> {
-        self.direct_command.as_deref()
-    }
-
     pub fn into_run(self) -> AgentRun {
         let AgentContext {
             plan,
@@ -175,19 +153,14 @@ impl AgentContext {
             execution,
             recovery,
             events,
-            direct_command,
             ..
         } = self;
 
-        let outcome = if let Some(command) = direct_command {
-            AgentOutcome::DirectCommand { command }
-        } else {
-            AgentOutcome::Planned {
-                plan,
-                validation,
-                execution,
-                recovery,
-            }
+        let outcome = AgentOutcome::Planned {
+            plan,
+            validation,
+            execution,
+            recovery,
         };
 
         AgentRun { outcome, events }
@@ -212,7 +185,6 @@ pub enum AgentEvent {
     StageCompleted(StageKind),
     StageSkipped { stage: StageKind, reason: String },
     StageFailed { stage: StageKind, error: String },
-    ClassificationReady(Classification),
     PlanReady { confidence: f32 },
     ValidationFinished { missing: usize, can_continue: bool },
     ExecutionFinished { success: bool },

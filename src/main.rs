@@ -1,10 +1,8 @@
 mod agent;
-mod classifier;
 mod cli;
 mod client;
 mod config;
 mod exec;
-mod hook;
 mod planner;
 mod recovery;
 mod tokens;
@@ -30,7 +28,6 @@ async fn main() -> Result<()> {
         // Run with a dummy config that will trigger the welcome message
         let dummy_config = config::Config::builder()
             .with_models(|models| {
-                models.classifier.clear();
                 models.planner.clear();
             })
             .build()

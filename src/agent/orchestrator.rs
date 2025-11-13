@@ -3,14 +3,12 @@ use anyhow::Result;
 use crate::config::Config;
 
 use super::adapters::{
-    CommandValidationAdapter, DirectClassifierAdapter, DirectPlanningAdapter, NoopExecutionAdapter,
-    NoopRecoveryAdapter,
+    CommandValidationAdapter, DirectPlanningAdapter, NoopExecutionAdapter, NoopRecoveryAdapter,
 };
 use super::context::{AgentContext, AgentRequest, AgentRun};
 use super::outcome::AgentOutcome;
 use super::stages::{
-    AgentStage, ClassificationStage, ExecutionStage, PlanningStage, RecoveryStage, StageOutcome,
-    ValidationStage,
+    AgentStage, ExecutionStage, PlanningStage, RecoveryStage, StageOutcome, ValidationStage,
 };
 
 pub struct AgentOrchestrator {
@@ -74,15 +72,6 @@ impl AgentPipelineBuilder {
         self
     }
 
-    pub fn with_classification_adapter<A>(mut self, adapter: A) -> Self
-    where
-        A: super::adapters::ClassificationAdapter + Send + Sync + 'static,
-    {
-        self.stages
-            .push(Box::new(ClassificationStage::new(adapter)));
-        self
-    }
-
     pub fn with_planning_adapter<P>(mut self, adapter: P) -> Self
     where
         P: super::adapters::PlanningAdapter + Send + Sync + 'static,
@@ -116,8 +105,7 @@ impl AgentPipelineBuilder {
     }
 
     pub fn with_default_adapters(self) -> Self {
-        self.with_classification_adapter(DirectClassifierAdapter::default())
-            .with_planning_adapter(DirectPlanningAdapter::default())
+        self.with_planning_adapter(DirectPlanningAdapter::default())
             .with_validation_adapter(CommandValidationAdapter)
             .with_execution_adapter(NoopExecutionAdapter)
             .with_recovery_adapter(NoopRecoveryAdapter)

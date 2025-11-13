@@ -329,7 +329,6 @@ mod tests {
                 user_agent: "li/test".to_string(),
             },
             models: ModelSettings {
-                classifier: "nvidia/nemotron-nano-12b-v2-vl:free".to_string(),
                 planner: "minimax/minimax-m2:free".to_string(),
                 max_tokens: 512,
             },

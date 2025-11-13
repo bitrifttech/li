@@ -11,14 +11,12 @@
 
 - 🧠 **Natural Language to Commands**: Type plain English, get shell commands
 - 🛡️ **Safe Execution**: Every plan is previewed before execution
-- 🎯 **Smart Classification**: Automatically distinguishes between shell commands and natural language tasks
 - 💬 **Direct AI Chat**: Use `--chat` flag for conversational AI assistance
 - 🧠 **AI Intelligence Mode**: Use `-i` flag to explain command outputs in human-friendly terms
 - 🌐 **Provider Choice**: Switch between OpenRouter and Cerebras with `li --provider`
 - 🔧 **Interactive Setup**: Easy first-time configuration with `li --setup`
 - 🎨 **Visual Separators**: Clear distinction between li output and command output
 - 📋 **Model Selection**: Browse OpenRouter's free models when using that provider
-- 🪝 **Shell Hook Integration**: Optional zsh hook for seamless terminal experience
 
 ## 🚀 Quick Start
 
@@ -52,7 +50,7 @@ cargo install --git https://github.com/bitrifttech/li.git
    This will guide you through:
    - Choosing your AI provider (OpenRouter or Cerebras)
    - Supplying the provider API key
-   - Selecting classifier and planner models (OpenRouter only)
+   - Selecting a planner model (OpenRouter only)
    - Configuring timeout and token limits
 
 2. **Add your provider API key**:
@@ -102,7 +100,6 @@ li --provider list
 
 # Manual configuration
 li config --api-key YOUR_OPENROUTER_API_KEY
-li config --classifier-model nvidia/nemotron-nano-12b-v2-vl:free
 li config --planner-model minimax/minimax-m2:free
 ```
 
@@ -116,7 +113,6 @@ li -i "command"              # Explain command output with AI
 li --intelligence "command"  # Long form of -i flag
 li --model                   # Interactive model selection
 li --model list              # Show available models
-li --classify "command"      # Classify input only (for shell hooks)
 li config                    # View current configuration
 ```
 
@@ -231,7 +227,6 @@ li stores configuration in `~/.li/config` (JSON format):
   "openrouter_api_key": "sk-or-v1-your-api-key",
   "timeout_secs": 30,
   "max_tokens": 2048,
-  "classifier_model": "nvidia/nemotron-nano-12b-v2-vl:free",
   "planner_model": "minimax/minimax-m2:free"
 }
 ```
@@ -247,7 +242,6 @@ export LI_PROVIDER="openrouter"          # or 'cerebras'
 export LI_LLM_BASE_URL="https://openrouter.ai/api/v1"
 export LI_TIMEOUT_SECS="60"
 export LI_MAX_TOKENS="4096"
-export LI_CLASSIFIER_MODEL="nvidia/nemotron-nano-12b-v2-vl:free"
 export LI_PLANNER_MODEL="minimax/minimax-m2:free"
 ```
 
@@ -258,7 +252,6 @@ export LI_PLANNER_MODEL="minimax/minimax-m2:free"
 li --config --api-key sk-or-v1-your-key
 
 # Set custom models
-li --config --classifier-model nvidia/nemotron-nano-12b-v2-vl:free
 li --config --planner-model minimax/minimax-m2:free
 
 # Adjust settings
@@ -274,7 +267,6 @@ li --provider cerebras
 li ships with OpenRouter defaults and supports additional providers such as Cerebras.
 
 ### OpenRouter Defaults
-- **Classifier**: `nvidia/nemotron-nano-12b-v2-vl:free` - Fast, accurate command classification
 - **Planner**: `minimax/minimax-m2:free` - Intelligent shell command planning
 
 ### Available Free Models
@@ -286,27 +278,6 @@ li --model         # Interactive model selection
 ### Cerebras Models
 - Provide model IDs from your Cerebras workspace during setup or via `li --config`
 - Use `CEREBRAS_API_KEY` and optional `LI_LLM_BASE_URL` to target custom deployments
-
-## 🪝 Shell Integration (Optional)
-
-For a seamless experience, install the zsh hook to automatically route natural language through li:
-
-```bash
-# Install the hook
-li install
-
-# Restart your shell or run:
-source ~/.zshrc
-```
-
-After installation:
-- Type `ls -la` → Executes directly (classified as terminal command)
-- Type "show all files" → Routes through li (classified as natural language)
-
-```bash
-# Uninstall the hook
-li uninstall
-```
 
 ## 🎨 Output Examples
 
@@ -448,9 +419,9 @@ src/
 ├── config.rs            # Configuration management
 ├── client.rs            # LLM provider client (OpenRouter, Cerebras)
 ├── classifier/          # Command classification logic
-├── planner/             # Command planning logic
+├── planner/             # Command planning
 ├── exec/                # Command execution
-└── hook/                # Shell integration
+│   └── mod.rs           # Execution implementation
 ```
 
 ### Running Tests
@@ -484,7 +455,6 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ## 🎯 Roadmap
 
 ### v1.1 (Planned)
-- [ ] Bash/Fish shell hooks
 - [ ] Better portability shims (BSD vs GNU utilities)
 - [ ] Command history and favorites
 - [ ] Custom command templates

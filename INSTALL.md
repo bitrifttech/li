@@ -59,8 +59,7 @@ li config
 # Set API key
 li config --api-key your-key-here
 
-# Set custom models
-li config --classifier-model nvidia/nemotron-nano-12b-v2-vl:free
+# Set planner model
 li config --planner-model minimax/minimax-m2:free
 ```
 

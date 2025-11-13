@@ -7,8 +7,8 @@ pub mod types;
 
 #[allow(unused_imports)]
 pub use adapters::{
-    CommandValidationAdapter, DirectClassifierAdapter, DirectPlanningAdapter, NoopExecutionAdapter,
-    NoopRecoveryAdapter, PlanExecutionAdapter,
+    CommandValidationAdapter, DirectPlanningAdapter, NoopExecutionAdapter, NoopRecoveryAdapter,
+    PlanExecutionAdapter,
 };
 #[allow(unused_imports)]
 pub use context::{AgentContext, AgentEvent, AgentRequest, AgentRun};
@@ -18,8 +18,7 @@ pub use orchestrator::{AgentOrchestrator, AgentPipelineBuilder};
 pub use outcome::{AgentOutcome, ExecutionReport, RecoveryOutcome};
 #[allow(unused_imports)]
 pub use stages::{
-    AgentStage, ClassificationStage, ExecutionStage, PlanningStage, RecoveryStage, StageOutcome,
-    ValidationStage,
+    AgentStage, ExecutionStage, PlanningStage, RecoveryStage, StageOutcome, ValidationStage,
 };
 #[allow(unused_imports)]
 pub use types::StageKind;

@@ -19,12 +19,10 @@
 ### Key Features
 - 🧠 **Natural Language to Commands**: Type plain English, get shell commands
 - 🛡️ **Safe Execution**: Every plan is previewed before execution
-- 🎯 **Smart Classification**: Automatically distinguishes between shell commands and natural language tasks
 - 💬 **Direct AI Chat**: Use `--chat` flag for conversational AI assistance
 - 🧠 **AI Intelligence Mode**: Use `-i` flag to explain command outputs in human-friendly terms
 - 🌐 **Provider Choice**: Switch between OpenRouter and Cerebras with `li --provider`
 - 🔧 **Interactive Setup**: Easy first-time configuration with `li --setup`
-- 🪝 **Shell Hook Integration**: Optional zsh hook for seamless terminal experience
 
 ### Design Philosophy
 - **Safety First**: Never auto-execute without explicit user action
@@ -51,8 +49,6 @@ li/
 │   │   ├── outcome.rs           # Result types and handling
 │   │   ├── stages.rs            # Stage definitions
 │   │   └── types.rs             # Core type definitions
-│   ├── classifier/               # Input classification logic
-│   │   └── mod.rs               # Classification implementation
 │   ├── planner/                  # Command planning logic
 │   │   └── mod.rs               # Planning implementation
 │   ├── validator/                # Command validation system
@@ -62,8 +58,6 @@ li/
 │   ├── recovery/                 # Error recovery system
 │   │   ├── mod.rs               # Recovery implementation
 │   │   └── tests.rs             # Recovery tests
-│   ├── hook/                     # Shell integration hooks
-│   │   └── mod.rs               # Hook implementation
 │   ├── client.rs                 # HTTP client for AI services
 │   ├── config.rs                 # Configuration management
 │   └── tokens.rs                 # Token handling utilities
@@ -134,7 +128,6 @@ Pipeline orchestration system that:
 
 #### [`src/agent/adapters.rs`](src/agent/adapters.rs:1)
 Implementation of pipeline stage adapters:
-- `DirectClassifierAdapter`: Handles input classification
 - `DirectPlanningAdapter`: Manages command planning
 - `CommandValidationAdapter`: Validates planned commands
 - `PlanExecutionAdapter`: Executes approved plans
@@ -149,22 +142,12 @@ Shared execution context that tracks:
 
 #### [`src/agent/stages.rs`](src/agent/stages.rs:1)
 Stage definitions for the processing pipeline:
-- `ClassificationStage`: Determines input type
 - `PlanningStage`: Generates command plans
 - `ValidationStage`: Checks command availability
 - `ExecutionStage`: Runs approved commands
 - `RecoveryStage`: Handles missing tools/errors
 
 ### AI Service Integration
-
-#### [`src/classifier/mod.rs`](src/classifier/mod.rs:1)
-Input classification system that:
-- Uses AI to distinguish natural language from shell commands
-- Implements strict JSON parsing for reliable results
-- Provides comprehensive testing with mocked responses
-- Uses a detailed system prompt for consistent classification
-
-**Key responsibilities**: Input analysis, command vs. NL detection
 
 #### [`src/planner/mod.rs`](src/planner/mod.rs:1)
 Command planning system that:
@@ -205,12 +188,6 @@ Error recovery system that:
 - Offers interactive recovery menus
 - Supports multiple recovery strategies (alternatives first, installation first)
 
-#### [`src/hook/mod.rs`](src/hook/mod.rs:1)
-Shell integration system that:
-- Installs zsh hooks for seamless integration
-- Handles shell command interception
-- Provides install/uninstall functionality
-
 ### Configuration & Utilities
 
 #### [`src/config.rs`](src/config.rs:1)
@@ -233,95 +210,38 @@ Token handling utilities for:
 ### System Architecture Diagram
 
 ```mermaid
-graph TB
-    subgraph "User Interface Layer"
-        CLI[CLI Interface]
-        Hook[Shell Hook]
-        Setup[Interactive Setup]
-    end
-    
-    subgraph "Orchestration Layer"
-        Orch[Agent Orchestrator]
-        Context[Agent Context]
-        Stages[Pipeline Stages]
-    end
-    
-    subgraph "Processing Layer"
-        Class[Classifier]
-        Plan[Planner]
-        Valid[Validator]
-        Exec[Executor]
-        Recover[Recovery Engine]
-    end
-    
-    subgraph "Service Layer"
-        LLM[AI Client]
-        Config[Configuration]
-        Shell[Command Shell]
-    end
-    
-    subgraph "External Services"
-        ProviderAPI[LLM Provider API (OpenRouter/Cerebras)]
-        FileSystem[Local File System]
-    end
-    
-    CLI --> Orch
-    Hook --> Class
-    Setup --> Config
-    
-    Orch --> Stages
-    Orch --> Context
-    
-    Stages --> Class
-    Stages --> Plan
-    Stages --> Valid
-    Stages --> Exec
-    Stages --> Recover
-    
-    Class --> LLM
-    Plan --> LLM
-    Valid --> Shell
-    Exec --> Shell
-    Recover --> LLM
-    Recover --> Shell
-    
-    LLM --> ProviderAPI
-    Config --> FileSystem
-    Exec --> FileSystem
+graph TD
+    CLI[CLI Parser] -->|Parses Args| Runtime[CLI Runtime]
+    Runtime -->|Build Request| Orchestrator
+    Orchestrator -->|Produce Events| Context
+    Orchestrator -->|Invoke Adapter| Planning
+    Planning -->|Plan Ready| Orchestrator
+    Orchestrator -->|Validate| Validation
+    Validation -->|Missing Tools| Recovery
+    Validation -->|Plan OK| Execution
+    Recovery --> Orchestrator
+    Execution --> Orchestrator
+    Orchestrator --> Outcome[AgentOutcome]
 ```
 
 ### Data Flow Diagram
 
 ```mermaid
 flowchart LR
-    A[User Input] --> B{Classification}
-    B -- Terminal Command --> C[Execute Directly]
-    B -- Natural Language --> D[Planning]
-    
-    D --> E{Needs Clarification?}
-    E -- Yes --> F[Ask User]
-    F --> D
-    E -- No --> G[Generate Plan]
-    
-    G --> H[Validation]
-    H --> I{All Commands Available?}
-    I -- No --> J[Recovery Engine]
-    J --> K{Recovery Successful?}
-    K -- Yes --> H
-    K -- No --> L[Report Failure]
-    
-    I -- Yes --> M[Show Plan to User]
-    M --> N{User Approves?}
-    N -- Yes --> O[Execute Plan]
-    N -- No --> P[Cancel]
-    
-    O --> Q{Success?}
-    Q -- Yes --> R[Report Success]
-    Q -- No --> S[Report Failure]
-    
-    J --> T[Alternative Commands]
-    J --> U[Installation Instructions]
-    J --> V[Skip Options]
+    A[User Input] --> B[Planning]
+    B --> C{Clarification Needed?}
+    C -- Yes --> D[Ask Follow-up Question]
+    D --> B
+    C -- No --> E[Validation]
+    E --> F{Missing Tools?}
+    F -- Yes --> G[Recovery Engine]
+    G --> E
+    F -- No --> H[User Approval]
+    H -- Approve --> I[Execution]
+    H -- Decline --> J[Abort Pipeline]
+    I --> K{Execution Success?}
+    K -- Yes --> L[Report Success]
+    K -- No --> M[Report Failure]
 ```
 
 ### Component Interaction Diagram
@@ -331,37 +251,30 @@ sequenceDiagram
     participant User
     participant CLI
     participant Orchestrator
-    participant Classifier
     participant Planner
     participant Validator
     participant Recovery
     participant Executor
     participant AI
-    
+
     User->>CLI: li 'make a git repo'
     CLI->>Orchestrator: Process request
-    Orchestrator->>Classifier: Classify input
-    Classifier->>AI: Is this NL or Terminal?
-    AI-->>Classifier: Natural Language
-    Classifier-->>Orchestrator: NL classification
-    
     Orchestrator->>Planner: Generate plan
     Planner->>AI: Convert to shell commands
     AI-->>Planner: JSON plan response
     Planner-->>Orchestrator: Structured plan
-    
+
     Orchestrator->>Validator: Check commands
-    Validator->>Executor: command -v git
-    Executor-->>Validator: git found
-    Validator-->>Orchestrator: All commands valid
-    
+    Validator-->>Orchestrator: Tools available?
+    Validator->>Recovery: (only if missing tools)
+    Recovery-->>Validator: Alternatives or installs
+
     Orchestrator->>CLI: Plan ready for review
     CLI->>User: Show plan and ask approval
     User->>CLI: Approve execution
-    CLI->>Executor: Execute approved plan
-    Executor->>User: Stream command output
-    Executor-->>CLI: Execution complete
-    CLI-->>User: Success/failure report
+    CLI->>Executor: Run plan
+    Executor->>CLI: Stream output
+    CLI->>User: Display results
 ```
 
 ---
@@ -371,74 +284,63 @@ sequenceDiagram
 ### Startup Flow
 
 ```mermaid
-flowchart TD
-    A[li command executed] --> B{Setup flag?}
-    B -- Yes --> C[Run interactive setup]
-    B -- No --> D{Empty task?}
-    D -- Yes --> E[Show welcome/help]
-    D -- No --> F[Load configuration]
-    F --> G{Config valid?}
-    G -- No --> H[Error + setup instructions]
-    G -- Yes --> I[Parse CLI arguments]
-    I --> J[Route to appropriate handler]
-    
-    J --> K{Command type}
-    K -- Chat --> L[Direct AI chat]
-    K -- Intelligence --> M[Explain command output]
-    K -- Setup --> N[Interactive configuration]
-    K -- Config --> O[Update settings]
-    K -- Model --> P[Model selection]
-    K -- Task --> Q[Main processing pipeline]
-    
-    Q --> R[Agent orchestrator]
-    R --> S[Classification stage]
-    S --> T{Input type}
-    T -- Terminal --> U[Direct execution]
-    T -- NL --> V[Continue pipeline]
+graph TD
+    A[Startup] --> B[Load config]
+    B --> C{Config file exists?}
+    C -- No --> D[Create default config]
+    C -- Yes --> E[Validate config]
+    E --> F{Config valid?}
+    F -- No --> G[Error + setup instructions]
+    F -- Yes --> H[Parse CLI arguments]
+    H --> I[Route to appropriate handler]
+
+    I --> J{Command type}
+    J -- Chat --> K[Direct AI chat]
+    J -- Intelligence --> L[Explain command output]
+    J -- Setup --> M[Interactive configuration]
+    J -- Config --> N[Update settings]
+    J -- Model --> O[Model selection]
+    J -- Task --> P[Main processing pipeline]
+
+    P --> Q[Agent orchestrator]
+    Q --> R[Planning stage]
+    R --> S[Validation stage]
+    S --> T{Missing tools?}
+    T -- Yes --> U[Recovery stage]
+    T -- No --> V[User approval]
+    U --> S
+    V -- Approve --> W[Execution stage]
+    V -- Decline --> X[Abort pipeline]
+    W --> Y[Execution result]
 ```
 
 ### Main Processing Pipeline
 
 ```mermaid
 flowchart TD
-    A[Agent Request] --> B[Classification Stage]
-    B --> C{Classification Result}
-    C -- Terminal --> D[Direct Command Execution]
-    C -- Natural Language --> E[Planning Stage]
-    
-    E --> F[AI Planning Service]
-    F --> G{Plan Generated?}
-    G -- Needs Clarification --> H[Ask User Question]
-    H --> E
-    G -- Plan Ready --> I[Validation Stage]
-    
-    I --> J[Check Command Availability]
-    J --> K{All Commands Found?}
-    K -- Missing --> L[Recovery Stage]
-    K -- Found --> M[Present Plan to User]
-    
-    L --> N{Recovery Strategy}
-    N -- Alternatives First --> O[Generate Alternatives]
-    N -- Installation First --> P[Provide Install Instructions]
-    N -- Skip Only --> Q[Skip Step Option]
-    
-    O --> R[Show Recovery Menu]
-    P --> R
-    Q --> R
-    R --> S{User Choice}
-    S -- Success --> I
-    S -- Failed --> T[Abort Pipeline]
-    
-    M --> U{User Approval}
-    U -- Yes --> V[Execution Stage]
-    U -- No --> T
-    U -- Intelligence --> W[Execute + Explain]
-    
-    V --> X[Execute Commands]
-    W --> X
-    X --> Y{Execution Success}
-    Y -- Yes --> Z[Report Success]
-    Y -- No --> AA[Report Failure]
+    A[Agent Request] --> B[Planning Stage]
+    B --> C[AI Planning Service]
+    C --> D{Plan Generated?}
+    D -- Needs Clarification --> E[Ask User Question]
+    E --> B
+    D -- Plan Ready --> F[Validation Stage]
+
+    F --> G[Check Command Availability]
+    G --> H{All Commands Found?}
+    H -- Missing --> I[Recovery Stage]
+    I --> F
+    H -- Found --> J[Present Plan to User]
+
+    J --> K{User Approval}
+    K -- Approve --> L[Execution Stage]
+    K -- Decline --> M[Abort Pipeline]
+    K -- Intelligence --> N[Execute + Explain]
+
+    L --> O[Execute Commands]
+    N --> O
+    O --> P{Execution Success}
+    P -- Yes --> Q[Report Success]
+    P -- No --> R[Report Failure]
 ```
 
 ---
@@ -473,9 +375,9 @@ flowchart TD
 
 **Key Components**:
 - **Orchestrator**: Pipeline management and stage coordination
-- **Adapters**: Pl implementations for each processing stage
+- **Adapters**: Implementations for each processing stage
 - **Context**: Shared state and execution tracking
-- **Stages**: Sequential processing steps (classify → plan → validate → execute → recover)
+- **Stages**: Sequential processing steps (plan → validate → execute → recover)
 - **Outcomes**: Rich result types for different execution paths
 
 **Key Functions**:
@@ -483,28 +385,7 @@ flowchart TD
 - [`AgentPipelineBuilder`](src/agent/orchestrator.rs:60): Configure processing stages
 - [`AgentContext`](src/agent/context.rs:1): Manage shared execution state
 
-### 3.Classifier Subsystem
-
-**Location**: [`src/classifier/mod.rs`](src/classifier/mod.rs:1)
-
-**Purpose**: Determines whether user input is a natural language request or a terminal command that should be executed directly.
-
-**Key Components**:
-- **Classification Engine**: AI-powered input analysis
-- **JSON Parser**: Strict parsing of AI responses
-- **System Prompt**: Detailed instructions for consistent classification
-
-**Key Functions**:
-- [`classify()`](src/classifier/mod.rs:46): Main classification function
-- **Classification enum**: [`Terminal`](src/classifier/mod.rs:35) vs [`NaturalLanguage`](src/classifier/mod.rs:36)
-
-**Classification Rules**:
-- Commands starting with known tools → Terminal
-- Complex shell syntax (pipes, redirects) → Terminal
-- Natural language phrases → Natural Language
-- Path-based commands → Terminal
-
-### 4. Planner Subsystem
+### 3. Planner Subsystem
 
 **Location**: [`src/planner/mod.rs`](src/planner/mod.rs:1)
 
@@ -527,7 +408,7 @@ flowchart TD
 - Requires user approval for execution
 - Confidence scoring for plans
 
-### 5. Validator Subsystem
+### 4. Validator Subsystem
 
 **Location**: [`src/validator/mod.rs`](src/validator/mod.rs:1)
 
@@ -550,7 +431,7 @@ flowchart TD
 - Maintains cache for repeated checks
 - Provides detailed missing command information
 
-### 6. Executor Subsystem
+### 5. Executor Subsystem
 
 **Location**: [`src/exec/mod.rs`](src/exec/mod.rs:1)
 
@@ -574,7 +455,7 @@ flowchart TD
 - Error propagation
 - Success/failure reporting
 
-### 7. Recovery Subsystem
+### 6. Recovery Subsystem
 
 **Location**: [`src/recovery/mod.rs`](src/recovery/mod.rs:1)
 
@@ -597,18 +478,7 @@ flowchart TD
 - **Skip Only**: Only allow skipping failed steps
 - **Never Recover**: Disable recovery entirely
 
-### 8. Hook Subsystem
-
-**Location**: [`src/hook/mod.rs`](src/hook/mod.rs:1)
-
-**Purpose**: Provides shell integration for seamless terminal experience.
-
-**Key Components**:
-- **Shell Hooks**: Command interception
-- **Installation System**: Hook setup/management
-- **Integration Layer**: Shell-bridging functionality
-
-### 9. Configuration Subsystem
+### 8. Configuration Subsystem
 
 **Location**: [`src/config.rs`](src/config.rs:1)
 
@@ -647,19 +517,29 @@ pub enum LlmProvider {
 }
 ```
 
-### 2. Extending Command Classification
+### 2. Extending Command Planning
 
 **Files to modify**:
-- [`src/classifier/mod.rs`](src/classifier/mod.rs:1) - Update system prompt
-- [`src/classifier/mod.rs`](src/classifier/mod.rs:33) - Add new classification types
+- [`src/planner/mod.rs`](src/planner/mod.rs:1) - Update system prompt or JSON schema
+- [`src/cli/runtime.rs`](src/cli/runtime.rs:1) - Adjust plan rendering/approval flow
 
-**Example**: Adding a "script" classification
+**Example**: Adding new safety heuristics
 ```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Classification {
-    Terminal,
-    NaturalLanguage,
-    Script,  // New classification type
+// In src/planner/mod.rs
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum PlannerResponse {
+    Plan {
+        confidence: f32,
+        dry_run_commands: Vec<String>,
+        execute_commands: Vec<String>,
+        notes: String,
+        safety_warnings: Vec<String>, // New field
+    },
+    Question {
+        text: String,
+        context: String,
+    },
 }
 ```
 
@@ -737,11 +617,22 @@ async fn handle_history(args: HistoryArgs, config: &Config) -> Result<()> {
 - [`src/validator/mod.rs`](src/validator/mod.rs:1) - Add new validation logic
 - [`src/validator/mod.rs`](src/validator/mod.rs:12) - Expand validation result types
 
-### 8. Shell Integration Extensions
+### 8. Validation & Recovery Enhancements
 
 **Files to modify**:
-- [`src/hook/mod.rs`](src/hook/mod.rs:1) - Add new shell support
-- [`src/cli/runtime.rs`](src/cli/runtime.rs:1) - Update installation logic
+- [`src/validator/mod.rs`](src/validator/mod.rs:1) - Adjust validation heuristics
+- [`src/recovery/mod.rs`](src/recovery/mod.rs:1) - Update recovery strategies
+
+**Example**: Adding automated retries
+```rust
+// In src/recovery/mod.rs
+pub enum RecoveryResult {
+    AlternativeSucceeded(CommandAlternative),
+    InstallationSucceeded(InstallationInstruction),
+    RetryScheduled { delay_secs: u64 }, // New variant
+    // ...existing variants
+}
+```
 
 ---
 
@@ -817,7 +708,6 @@ async fn handle_history(args: HistoryArgs, config: &Config) -> Result<()> {
 #### File System Integration
 - **Configuration Location**: `~/.li/config`
 - **Log Directory**: `LI_LOG_DIR` environment variable
-- **Shell Integration**: `~/.zshrc` modifications
 
 ### Key Design Patterns
 
@@ -841,8 +731,8 @@ let config = Config::builder()
 #### Adapter Pattern
 ```rust
 // From src/agent/adapters.rs
-pub struct DirectClassifierAdapter {
-    client: Arc<dyn LlmClient>,
+pub struct DirectPlanningAdapter {
+    factory: Arc<dyn LlmClientFactory>,
 }
 ```
 
@@ -850,9 +740,10 @@ pub struct DirectClassifierAdapter {
 ```rust
 // From src/agent/outcome.rs
 pub enum AgentOutcome {
-    DirectCommand { command: String },
     Planned { plan: Option<Plan>, validation: Option<ValidationResult>, ... },
-    // ... other variants
+    AwaitingClarification { question: String, context: String },
+    Cancelled { reason: String },
+    Failed { stage: StageKind, error: String },
 }
 ```
 
@@ -868,8 +759,9 @@ Key architectural strengths:
 - **Extensible Pipeline**: Adapter-based system allows easy addition of new processing stages
 - **Robust Error Handling**: Comprehensive recovery system with multiple strategies
 - **Configuration Flexibility**: Multiple configuration sources with sensible defaults
+- **Pluggable Providers**: Easy to swap hosted LLMs without changing the core pipeline
 
-The architecture is well-positioned for future enhancements including additional AI providers, new shell integrations, and extended command capabilities while maintaining backward compatibility and user safety.
+The architecture is well-positioned for future enhancements including additional AI providers and extended command capabilities while maintaining backward compatibility and user safety.
 
 ---
 
