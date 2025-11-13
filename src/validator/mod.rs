@@ -1,5 +1,5 @@
 //! Validator module providing command validation functionality
-//! 
+//!
 //! This module checks whether commands in execution plans are available on the system
 //! before attempting to run them, preventing execution failures due to missing tools.
 
@@ -8,13 +8,11 @@ use anyhow::{Result, anyhow};
 use crate::planner::Plan;
 
 // Re-export all public types
-pub use types::{
-    CommandValidator, MissingCommand, ValidationResult,
-};
+pub use types::{CommandValidator, MissingCommand, ValidationResult};
 
 // Module declarations
-mod types;
 mod checker;
+mod types;
 
 impl CommandValidator {
     /// Create a new command validator

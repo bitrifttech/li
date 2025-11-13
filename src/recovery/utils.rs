@@ -42,11 +42,9 @@ pub fn generate_fallback_alternatives(
         }
         "git" => {
             alternatives.push(CommandAlternative {
-                command:
-                    "echo 'Git is required for version control. Please install git first.'"
-                        .to_string(),
-                description: "Git cannot be easily replaced - installation required"
+                command: "echo 'Git is required for version control. Please install git first.'"
                     .to_string(),
+                description: "Git cannot be easily replaced - installation required".to_string(),
                 confidence: 0.1,
             });
         }
@@ -180,7 +178,9 @@ pub async fn execute_installation(
         context.missing_command.command.bold()
     );
 
-    let install_cmd = instruction.install_commands.first()
+    let install_cmd = instruction
+        .install_commands
+        .first()
         .unwrap_or(&instruction.command);
 
     let result = tokio::process::Command::new("sh")

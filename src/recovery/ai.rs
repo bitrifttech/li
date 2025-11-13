@@ -235,7 +235,10 @@ Respond in valid JSON format:
     }
 
     /// Convert AI response to structured recovery options
-    pub fn convert_response_to_options(&self, response: RecoveryResponse) -> Result<RecoveryOptions> {
+    pub fn convert_response_to_options(
+        &self,
+        response: RecoveryResponse,
+    ) -> Result<RecoveryOptions> {
         use super::types::{CommandAlternative, InstallationInstruction};
 
         let command_alternatives: Vec<CommandAlternative> = response

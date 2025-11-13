@@ -1,5 +1,5 @@
 //! Recovery module providing intelligent error recovery for missing commands
-//! 
+//!
 //! This module offers AI-powered recovery suggestions when commands fail during execution,
 //! including alternative commands, installation instructions, and user interaction.
 
@@ -12,13 +12,13 @@ use crate::validator::MissingCommand;
 
 // Re-export all public types
 pub use types::{
-    CommandAlternative, InstallationInstruction, RecoveryChoice, RecoveryContext,
-    RecoveryEngine, RecoveryOptions, RecoveryResult,
+    CommandAlternative, InstallationInstruction, RecoveryChoice, RecoveryContext, RecoveryEngine,
+    RecoveryOptions, RecoveryResult,
 };
 
 // Module declarations
-mod types;
 mod ai;
+mod types;
 mod ui;
 mod utils;
 
@@ -72,7 +72,9 @@ impl RecoveryEngine {
                     .await
             }
             RecoveryPreference::SkipOnError => Ok(RecoveryOptions::skip_only()),
-            RecoveryPreference::NeverRecover => Err(anyhow::anyhow!("Recovery disabled by configuration")),
+            RecoveryPreference::NeverRecover => {
+                Err(anyhow::anyhow!("Recovery disabled by configuration"))
+            }
         }
     }
 
@@ -131,13 +133,8 @@ impl RecoveryEngine {
                     )
                     .await?;
                 if let Some(instruction) = options.installation_instructions.get(index) {
-                    utils::execute_installation(
-                        self,
-                        instruction.clone(),
-                        context,
-                        &self.config,
-                    )
-                    .await
+                    utils::execute_installation(self, instruction.clone(), context, &self.config)
+                        .await
                 } else {
                     Ok(RecoveryResult::PlanAborted(
                         "Invalid installation index".to_string(),
