@@ -108,7 +108,7 @@ fn show_welcome_message() -> Result<()> {
     println!();
     println!("📖 What li does:");
     println!("   • Converts natural language to shell commands");
-    println!("   • Gives intellegent analysis of command output");
+    println!("   • Gives intelligent analysis of command output");
     println!("   • Executes safe, minimal command plans");
     println!("   • Powered by configurable LLM providers (OpenRouter, Cerebras)");
     println!();
@@ -119,24 +119,36 @@ fn show_welcome_message() -> Result<()> {
         println!();
     }
 
-    println!("💡 How to use li:");
+    println!("💡 Quick commands:");
+    println!("   li --help                                          # Show all options");
     println!(
         "   li --setup                                         # Interactive first-time setup"
     );
     println!("   li 'list all files in current directory'           # Plan & execute commands");
     println!("   li --chat 'what is the capital of France?'         # Direct AI conversation");
     println!(
+        "   li chat --model minimax/minimax-m2:free \"Your prompt\"   # Chat subcommand variant"
+    );
+    println!(
         "   li -i 'df -h'                                      # Explain command output with AI"
     );
-    println!("   li -i -q 'Which disk has the most space?' 'df -h'  # Ask a question about output");
+    println!(
+        "   li -i --question 'Which disk has the most space?' \"df -h\"  # Ask a question about output"
+    );
+    println!(
+        "   df | li -i                                         # Analyze piped command output"
+    );
+    println!("   df | li -q 'Which disk has the most space?'        # Ask about piped output");
     println!("   li --model                                         # Interactive model selection");
     println!("   li --model list                                    # Show available models");
     println!(
         "   li --provider                                      # Interactive provider selection"
     );
     println!("   li --provider list                                 # Show supported providers");
+    println!("   li --provider cerebras                             # Switch provider");
+    println!("   li --config                                        # Show current configuration");
     println!("   li --config --api-key YOUR_KEY                     # Set API key manually");
-    println!("   li --config --timeout 60                           # Set timeout in seconds");
+    println!("   li --config --timeout 60                           # Set timeout (seconds)");
     println!("   li --config --max-tokens 4096                      # Set max tokens");
     println!("   li --config --planner-model MODEL                  # Set planner model");
     println!();
