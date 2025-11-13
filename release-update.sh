@@ -8,7 +8,7 @@ HOMEBREW_TAP_DIR="${SCRIPT_DIR}/../homebrew-li"
 
 if [ ! -d "$HOMEBREW_TAP_DIR" ]; then
     echo "❌ Homebrew tap directory not found at $HOMEBREW_TAP_DIR"
-    echo "   Clone https://github.com/bitrifttech/li-homebrew next to this repository."
+    echo "   Clone https://github.com/bitrifttech/homebrew-li next to this repository."
     exit 1
 fi
 
