@@ -1,10 +1,9 @@
 use anyhow::Result;
 use colored::*;
-use std::io::Write;
 
-use crate::config::Config;
-
-use super::types::{CommandAlternative, InstallationInstruction, RecoveryEngine, RecoveryResult};
+use super::types::{
+    CommandAlternative, InstallationInstruction, RecoveryContext, RecoveryEngine, RecoveryResult,
+};
 
 /// Generate fallback alternatives for common missing commands
 pub fn generate_fallback_alternatives(
@@ -113,7 +112,7 @@ pub fn generate_fallback_instructions(
 pub async fn execute_alternative(
     _engine: &RecoveryEngine,
     alternative: CommandAlternative,
-    _context: &super::types::RecoveryContext,
+    _context: &RecoveryContext,
 ) -> Result<RecoveryResult> {
     println!("🔄 Using alternative: {}", alternative.command.green());
 
@@ -149,28 +148,20 @@ pub async fn execute_alternative(
 
 /// Execute installation instructions and return the result
 pub async fn execute_installation(
-    _engine: &RecoveryEngine,
+    engine: &RecoveryEngine,
     instruction: InstallationInstruction,
-    context: &super::types::RecoveryContext,
-    config: &Config,
+    context: &RecoveryContext,
 ) -> Result<RecoveryResult> {
-    if !config.recovery.auto_install {
-        println!(
-            "📦 Installation instructions for {}:",
-            context.missing_command.command.bold()
-        );
-        println!("Command: {}", instruction.command.cyan());
-        println!("Description: {}", instruction.to_string());
+    println!(
+        "📦 Installation instructions for {}:",
+        context.missing_command.command.bold()
+    );
+    println!("Command: {}", instruction.command.cyan());
+    println!("Description: {}", instruction.to_string());
 
-        print!("Execute this installation command? [y/N]: ");
-        std::io::stdout().flush()?;
-
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-
-        if input.trim().to_lowercase() != "y" {
-            return Ok(RecoveryResult::InstallationCancelled);
-        }
+    let confirmation_label = format!("install {}", instruction.command);
+    if !engine.confirm_action(&confirmation_label)? {
+        return Ok(RecoveryResult::InstallationCancelled);
     }
 
     println!(

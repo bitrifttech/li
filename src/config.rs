@@ -192,52 +192,11 @@ impl Default for ModelSettings {
 #[derive(Debug, Clone)]
 pub struct RecoverySettings {
     pub enabled: bool,
-    pub preference: RecoveryPreference,
-    pub auto_install: bool,
 }
 
 impl Default for RecoverySettings {
     fn default() -> Self {
-        Self {
-            enabled: false,
-            preference: RecoveryPreference::NeverRecover,
-            auto_install: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum RecoveryPreference {
-    AlternativesFirst,
-    InstallationFirst,
-    SkipOnError,
-    NeverRecover,
-}
-
-impl fmt::Display for RecoveryPreference {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let label = match self {
-            RecoveryPreference::AlternativesFirst => "alternatives-first",
-            RecoveryPreference::InstallationFirst => "installation-first",
-            RecoveryPreference::SkipOnError => "skip-on-error",
-            RecoveryPreference::NeverRecover => "never-recover",
-        };
-        write!(f, "{label}")
-    }
-}
-
-impl FromStr for RecoveryPreference {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "alternatives-first" => Ok(RecoveryPreference::AlternativesFirst),
-            "installation-first" => Ok(RecoveryPreference::InstallationFirst),
-            "skip-on-error" => Ok(RecoveryPreference::SkipOnError),
-            "never-recover" => Ok(RecoveryPreference::NeverRecover),
-            other => Err(anyhow!("Unknown recovery preference '{other}'")),
-        }
+        Self { enabled: true }
     }
 }
 
@@ -374,12 +333,6 @@ impl FileConfigV2 {
                 if let Some(enabled) = recovery.enabled {
                     settings.enabled = enabled;
                 }
-                if let Some(preference) = recovery.preference {
-                    settings.preference = preference;
-                }
-                if let Some(auto_install) = recovery.auto_install {
-                    settings.auto_install = auto_install;
-                }
             })
         } else {
             builder
@@ -405,8 +358,6 @@ struct FileModelSettings {
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct FileRecoverySettings {
     enabled: Option<bool>,
-    preference: Option<RecoveryPreference>,
-    auto_install: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -432,8 +383,6 @@ impl<'a> From<&'a Config> for PersistedConfig<'a> {
             },
             recovery: PersistedRecovery {
                 enabled: config.recovery.enabled,
-                preference: config.recovery.preference,
-                auto_install: config.recovery.auto_install,
             },
         }
     }
@@ -457,8 +406,6 @@ struct PersistedModels<'a> {
 #[derive(Serialize)]
 struct PersistedRecovery {
     enabled: bool,
-    preference: RecoveryPreference,
-    auto_install: bool,
 }
 
 fn apply_env_overrides(mut builder: ConfigBuilder) -> Result<ConfigBuilder> {
@@ -684,9 +631,7 @@ mod tests {
         config.llm.timeout_secs = 55;
         config.models.max_tokens = 999;
         config.models.planner = "custom/planner".to_string();
-        config.recovery.enabled = true;
-        config.recovery.preference = RecoveryPreference::SkipOnError;
-        config.recovery.auto_install = true;
+        config.recovery.enabled = false;
         config.save().unwrap();
 
         let persisted = std::fs::read_to_string(Config::config_path().unwrap()).unwrap();
@@ -695,8 +640,6 @@ mod tests {
         assert_eq!(json["llm"]["timeout_secs"], 55);
         assert_eq!(json["models"]["planner"], "custom/planner");
         assert_eq!(json["models"]["max_tokens"], 999);
-        assert_eq!(json["recovery"]["enabled"], true);
-        assert_eq!(json["recovery"]["preference"], "skip-on-error");
-        assert_eq!(json["recovery"]["auto_install"], true);
+        assert_eq!(json["recovery"]["enabled"], false);
     }
 }

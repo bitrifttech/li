@@ -1,7 +1,6 @@
 use serde::Deserialize;
 use std::fmt;
 
-use crate::config::RecoveryPreference;
 use crate::planner::Plan;
 use crate::validator::MissingCommand;
 
@@ -19,7 +18,6 @@ pub struct RecoveryOptions {
     pub installation_instructions: Vec<InstallationInstruction>,
     pub can_skip_step: bool,
     pub retry_possible: bool,
-    pub recovery_preference: RecoveryPreference,
 }
 
 /// Alternative command suggestion
@@ -109,6 +107,13 @@ pub struct InstallResponse {
     pub confidence: Option<f32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryStrategy {
+    InstallationFirst,
+    SkipOnError,
+    NeverRecover,
+}
+
 impl RecoveryOptions {
     /// Create recovery options that only allow skipping
     pub fn skip_only() -> Self {
@@ -117,7 +122,6 @@ impl RecoveryOptions {
             installation_instructions: Vec::new(),
             can_skip_step: true,
             retry_possible: false,
-            recovery_preference: RecoveryPreference::SkipOnError,
         }
     }
 }

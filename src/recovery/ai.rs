@@ -33,56 +33,6 @@ impl RecoveryEngine {
         content.trim().to_string()
     }
 
-    /// Generate recovery options prioritizing command alternatives
-    pub async fn generate_alternatives_first(
-        &self,
-        missing: &MissingCommand,
-        original_plan: &Plan,
-        original_goal: &str,
-    ) -> Result<RecoveryOptions> {
-        let recovery_prompt = self.build_recovery_prompt(missing, original_plan, original_goal);
-
-        let request = ChatCompletionRequest {
-            model: self.config.models.planner.clone(),
-            messages: vec![ChatMessage {
-                role: ChatMessageRole::User,
-                content: recovery_prompt,
-            }],
-            max_tokens: Some(self.config.models.max_tokens),
-            temperature: Some(0.3),
-        };
-
-        let response = self
-            .client
-            .chat_completion(request)
-            .await
-            .context("Failed to get recovery suggestions from AI")?;
-
-        if let Some(choice) = response.choices.first() {
-            let json_content = Self::extract_json_from_markdown(&choice.message.content);
-            let recovery_response: RecoveryResponse = serde_json::from_str(&json_content)
-                .with_context(|| {
-                    format!(
-                        "Failed to parse AI recovery response: {}",
-                        choice.message.content
-                    )
-                })?;
-
-            let mut options = self.convert_response_to_options(recovery_response)?;
-
-            // For alternatives-first, ensure we have command alternatives
-            if options.command_alternatives.is_empty() {
-                // Fallback: try to generate simple alternatives
-                options.command_alternatives =
-                    utils::generate_fallback_alternatives(self, &missing.command)?;
-            }
-
-            Ok(options)
-        } else {
-            Err(anyhow!("AI returned no recovery suggestions"))
-        }
-    }
-
     /// Generate recovery options prioritizing installation instructions
     pub async fn generate_installation_first(
         &self,
@@ -126,63 +76,15 @@ impl RecoveryEngine {
                     utils::generate_fallback_instructions(self, &missing.command)?;
             }
 
+            if options.command_alternatives.is_empty() {
+                options.command_alternatives =
+                    utils::generate_fallback_alternatives(self, &missing.command)?;
+            }
+
             Ok(options)
         } else {
             Err(anyhow!("AI returned no installation suggestions"))
         }
-    }
-
-    /// Build AI prompt for alternative command suggestions
-    fn build_recovery_prompt(
-        &self,
-        missing: &MissingCommand,
-        _original_plan: &Plan,
-        original_goal: &str,
-    ) -> String {
-        format!(
-            r#"The command '{}' is not available on this system.
-
-Original goal: {}
-Failed command line: {}
-
-Available tools on this system: {}
-Operating system: {}
-
-Please suggest 2-3 alternative approaches to achieve the same goal, using only the available tools listed above.
-
-For each suggestion:
-1. Provide the exact command to run
-2. Explain why it works as an alternative
-3. Rate confidence (0.0-1.0) that it will achieve the same goal
-
-Also include installation instructions for the missing command if available.
-
-Respond in valid JSON format:
-{{
-  "alternatives": [
-    {{
-      "command": "alternate command",
-      "description": "why this works as an alternative",
-      "confidence": 0.9
-    }}
-  ],
-  "installation_instructions": [
-    {{
-      "command": "brew install {}",
-      "description": "install on macOS using Homebrew",
-      "platform": "macos"
-    }}
-  ],
-  "can_skip": false,
-  "original_goal_achievable": true
-}}"#,
-            missing.command,
-            original_goal,
-            missing.failed_command_line,
-            self.available_tools.join(", "),
-            std::env::consts::OS,
-            missing.command
-        )
     }
 
     /// Build AI prompt for installation-focused recovery
@@ -207,7 +109,8 @@ Include:
 2. Alternative commands that might achieve similar results
 3. Whether the original goal can be achieved without the missing tool
 
-Respond in valid JSON format:
+Return only a single JSON object matching the schema below. Do not include reasoning, prose, or code fences.
+
 {{
   "alternatives": [
     {{
@@ -267,7 +170,6 @@ Respond in valid JSON format:
             installation_instructions,
             can_skip_step: response.can_skip,
             retry_possible: response.original_goal_achievable,
-            recovery_preference: self.config.recovery.preference,
         })
     }
 }

@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::config::{Config, RecoveryPreference};
+    use crate::config::Config;
     use crate::recovery::{
         CommandAlternative, InstallationInstruction, RecoveryEngine, RecoveryOptions,
     };
@@ -43,11 +43,10 @@ mod tests {
         assert!(options.installation_instructions.is_empty());
         assert!(options.can_skip_step);
         assert!(!options.retry_possible);
-        assert_eq!(options.recovery_preference, RecoveryPreference::SkipOnError);
     }
 
     #[test]
-    fn recovery_engine_respects_enabled_flag_and_preference() {
+    fn recovery_engine_respects_enabled_flag() {
         let missing = MissingCommand {
             command: "fake".to_string(),
             failed_command_line: "fake --flag".to_string(),
@@ -58,21 +57,12 @@ mod tests {
         let mut disabled_config = Config::builder().build().unwrap();
         disabled_config.llm.api_key = "test-key".to_string();
         disabled_config.recovery.enabled = false;
-        disabled_config.recovery.preference = RecoveryPreference::AlternativesFirst;
         let engine = RecoveryEngine::new(&disabled_config).expect("engine should construct");
-        assert!(!engine.should_attempt_recovery(&missing));
-
-        let mut never_config = Config::builder().build().unwrap();
-        never_config.llm.api_key = "test-key".to_string();
-        never_config.recovery.enabled = true;
-        never_config.recovery.preference = RecoveryPreference::NeverRecover;
-        let engine = RecoveryEngine::new(&never_config).expect("engine should construct");
         assert!(!engine.should_attempt_recovery(&missing));
 
         let mut enabled_config = Config::builder().build().unwrap();
         enabled_config.llm.api_key = "test-key".to_string();
         enabled_config.recovery.enabled = true;
-        enabled_config.recovery.preference = RecoveryPreference::AlternativesFirst;
         let engine = RecoveryEngine::new(&enabled_config).expect("engine should construct");
         assert!(engine.should_attempt_recovery(&missing));
     }

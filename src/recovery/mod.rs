@@ -6,14 +6,14 @@
 use anyhow::Result;
 
 use crate::client::AIClient;
-use crate::config::{Config, RecoveryPreference};
+use crate::config::Config;
 use crate::planner::Plan;
 use crate::validator::MissingCommand;
 
 // Re-export all public types
 pub use types::{
     CommandAlternative, InstallationInstruction, RecoveryChoice, RecoveryContext, RecoveryEngine,
-    RecoveryOptions, RecoveryResult,
+    RecoveryOptions, RecoveryResult, RecoveryStrategy,
 };
 
 // Module declarations
@@ -43,6 +43,7 @@ impl RecoveryEngine {
     /// Generate recovery options for missing commands
     pub async fn generate_recovery_options(
         &mut self,
+        strategy: RecoveryStrategy,
         missing: &MissingCommand,
         original_plan: &Plan,
         original_goal: &str,
@@ -53,7 +54,6 @@ impl RecoveryEngine {
                 installation_instructions: Vec::new(),
                 can_skip_step: false,
                 retry_possible: false,
-                recovery_preference: RecoveryPreference::NeverRecover,
             });
         }
 
@@ -62,32 +62,21 @@ impl RecoveryEngine {
             self.set_available_tools().await?;
         }
 
-        match self.config.recovery.preference {
-            RecoveryPreference::AlternativesFirst => {
-                self.generate_alternatives_first(missing, original_plan, original_goal)
-                    .await
-            }
-            RecoveryPreference::InstallationFirst => {
+        match strategy {
+            RecoveryStrategy::InstallationFirst => {
                 self.generate_installation_first(missing, original_plan, original_goal)
                     .await
             }
-            RecoveryPreference::SkipOnError => Ok(RecoveryOptions::skip_only()),
-            RecoveryPreference::NeverRecover => {
-                Err(anyhow::anyhow!("Recovery disabled by configuration"))
+            RecoveryStrategy::SkipOnError => Ok(RecoveryOptions::skip_only()),
+            RecoveryStrategy::NeverRecover => {
+                Err(anyhow::anyhow!("Recovery disabled for this command"))
             }
         }
     }
 
     /// Check if recovery should be attempted for the given missing command
     pub fn should_attempt_recovery(&self, _missing: &MissingCommand) -> bool {
-        if !self.config.recovery.enabled {
-            return false;
-        }
-
-        match self.config.recovery.preference {
-            RecoveryPreference::NeverRecover => false,
-            _ => true,
-        }
+        self.config.recovery.enabled
     }
 
     /// Present recovery options to the user and get their choice
@@ -104,17 +93,10 @@ impl RecoveryEngine {
         &mut self,
         choice: RecoveryChoice,
         context: &RecoveryContext,
+        options: &RecoveryOptions,
     ) -> Result<RecoveryResult> {
         match choice {
             RecoveryChoice::UseAlternative(index) => {
-                // Generate options to get the alternatives
-                let options = self
-                    .generate_recovery_options(
-                        &context.missing_command,
-                        &context.original_plan,
-                        &context.original_goal,
-                    )
-                    .await?;
                 if let Some(alternative) = options.command_alternatives.get(index) {
                     utils::execute_alternative(self, alternative.clone(), context).await
                 } else {
@@ -124,17 +106,8 @@ impl RecoveryEngine {
                 }
             }
             RecoveryChoice::InstallCommand(index) => {
-                // Generate options to get the installation instructions
-                let options = self
-                    .generate_recovery_options(
-                        &context.missing_command,
-                        &context.original_plan,
-                        &context.original_goal,
-                    )
-                    .await?;
                 if let Some(instruction) = options.installation_instructions.get(index) {
-                    utils::execute_installation(self, instruction.clone(), context, &self.config)
-                        .await
+                    utils::execute_installation(self, instruction.clone(), context).await
                 } else {
                     Ok(RecoveryResult::PlanAborted(
                         "Invalid installation index".to_string(),

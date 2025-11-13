@@ -5,7 +5,7 @@ use crate::client::{
 use crate::config::{Config, DEFAULT_MAX_TOKENS, LlmProvider};
 use crate::exec;
 use crate::planner;
-use crate::recovery::{RecoveryContext, RecoveryEngine, RecoveryResult};
+use crate::recovery::{RecoveryContext, RecoveryEngine, RecoveryResult, RecoveryStrategy};
 use crate::validator::ValidationResult;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
@@ -969,54 +969,67 @@ async fn resolve_validation_issues(
     let mut any_success = false;
 
     for missing in &validation.missing_commands {
-        let options = engine
-            .generate_recovery_options(missing, plan, goal)
-            .await?;
-
-        if options.command_alternatives.is_empty()
-            && options.installation_instructions.is_empty()
-            && !options.can_skip_step
-        {
-            println!(
-                "No automated recovery options available for '{}'.",
-                missing.command
-            );
-            continue;
-        }
-
-        let choice = engine.present_recovery_menu(&options, missing).await?;
-        let context = RecoveryContext {
-            missing_command: missing.clone(),
-            original_plan: plan.clone(),
-            original_goal: goal.to_string(),
-        };
-
-        match engine.execute_recovery(choice, &context).await? {
-            RecoveryResult::AlternativeSucceeded(alt) => {
-                println!("✅ Alternative executed: {}", alt.command);
-                any_success = true;
-            }
-            RecoveryResult::InstallationSucceeded(inst) => {
-                println!("✅ Installation succeeded: {}", inst.command);
-                any_success = true;
-            }
-            RecoveryResult::InstallationCancelled => {
-                println!("Installation cancelled. Re-run the command when ready.");
+        loop {
+            let strategy = prompt_recovery_strategy()?;
+            if matches!(strategy, RecoveryStrategy::NeverRecover) {
+                println!(
+                    "Recovery cancelled. Resolve missing tools manually and rerun the command."
+                );
                 return Ok(false);
             }
-            RecoveryResult::PlanAborted(reason) => {
-                println!("Plan aborted: {}", reason);
-                return Ok(false);
+
+            let options = engine
+                .generate_recovery_options(strategy, missing, plan, goal)
+                .await?;
+
+            if options.command_alternatives.is_empty()
+                && options.installation_instructions.is_empty()
+                && !options.can_skip_step
+            {
+                println!(
+                    "No automated recovery options available for '{}'.",
+                    missing.command
+                );
+                continue;
             }
-            RecoveryResult::AlternativeFailed(_) | RecoveryResult::InstallationFailed(_) => {
-                println!("Recovery attempt did not succeed.");
-            }
-            RecoveryResult::StepSkipped => {
-                println!("Recovery step skipped.");
-            }
-            RecoveryResult::RetryRequested | RecoveryResult::RetryWithDifferentApproach => {
-                println!("Retry requested. Re-run the command after addressing the prompt.");
-                return Ok(false);
+
+            let choice = engine.present_recovery_menu(&options, missing).await?;
+            let context = RecoveryContext {
+                missing_command: missing.clone(),
+                original_plan: plan.clone(),
+                original_goal: goal.to_string(),
+            };
+
+            match engine.execute_recovery(choice, &context, &options).await? {
+                RecoveryResult::AlternativeSucceeded(alt) => {
+                    println!("✅ Alternative executed: {}", alt.command);
+                    any_success = true;
+                    break;
+                }
+                RecoveryResult::InstallationSucceeded(inst) => {
+                    println!("✅ Installation succeeded: {}", inst.command);
+                    any_success = true;
+                    break;
+                }
+                RecoveryResult::InstallationCancelled => {
+                    println!("Installation cancelled. Re-run the command when ready.");
+                    return Ok(false);
+                }
+                RecoveryResult::PlanAborted(reason) => {
+                    println!("Plan aborted: {}", reason);
+                    return Ok(false);
+                }
+                RecoveryResult::AlternativeFailed(_) | RecoveryResult::InstallationFailed(_) => {
+                    println!("Recovery attempt did not succeed. Try another option.");
+                }
+                RecoveryResult::StepSkipped => {
+                    println!("Recovery step skipped.");
+                    break;
+                }
+                RecoveryResult::RetryRequested | RecoveryResult::RetryWithDifferentApproach => {
+                    println!("Retry requested. Re-run the command after addressing the prompt.");
+                    return Ok(false);
+                }
             }
         }
     }
@@ -1047,6 +1060,29 @@ fn prompt_for_approval() -> Result<ApprovalResponse> {
         "y" | "yes" => Ok(ApprovalResponse::Yes),
         "i" | "intelligence" => Ok(ApprovalResponse::YesWithIntelligence),
         _ => Ok(ApprovalResponse::No),
+    }
+}
+
+fn prompt_recovery_strategy() -> Result<RecoveryStrategy> {
+    println!("\nChoose a recovery approach:");
+    println!("  1) Attempt installation steps first");
+    println!("  2) Skip this missing step and continue");
+    println!("  3) Cancel recovery and exit");
+
+    loop {
+        print!("Selection [1-3]: ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let trimmed = input.trim();
+
+        match trimmed {
+            "1" => return Ok(RecoveryStrategy::InstallationFirst),
+            "2" => return Ok(RecoveryStrategy::SkipOnError),
+            "3" => return Ok(RecoveryStrategy::NeverRecover),
+            _ => println!("❌ Please enter a number between 1 and 3."),
+        }
     }
 }
 
