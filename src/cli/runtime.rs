@@ -1065,7 +1065,7 @@ fn prompt_for_approval() -> Result<ApprovalResponse> {
 
 fn prompt_recovery_strategy() -> Result<RecoveryStrategy> {
     println!("\nChoose a recovery approach:");
-    println!("  1) Attempt installation steps first");
+    println!("  1) Look at alternate commands / install missing command");
     println!("  2) Skip this missing step and continue");
     println!("  3) Cancel recovery and exit");
 
