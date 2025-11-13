@@ -82,7 +82,16 @@ li/
 │   │   ├── ui.rs                # Recovery UI components
 │   │   └── utils.rs             # Recovery utility functions
 │   ├── client.rs                 # HTTP client for AI services
-│   ├── config.rs                 # Configuration management
+│   ├── config/                   # Configuration management (refactored)
+│   │   ├── mod.rs               # Main module exports and API
+│   │   ├── builder.rs           # ConfigBuilder implementation
+│   │   ├── constants.rs         # Configuration constants
+│   │   ├── defaults.rs          # Default implementations
+│   │   ├── environment.rs       # Environment variable handling
+│   │   ├── loader.rs            # File loading and saving logic
+│   │   ├── types.rs             # Config type definitions
+│   │   ├── validation.rs        # Configuration validation
+│   │   └── tests.rs             # Configuration tests
 │   └── tokens.rs                 # Token handling utilities
 ├── documentation/                # Documentation files
 │   ├── architecture-overview.md  # This document
@@ -591,9 +600,9 @@ flowchart TD
 - **Token Management**: Conservative token budgeting and context window optimization
 
 **Key Functions**:
-- [`Config::load()`](src/config.rs:38): Load configuration with environment overrides
-- [`Config::save()`](src/config.rs:53): Persist settings to disk with validation
-- [`ConfigBuilder`](src/config.rs:245): Fluent configuration API
+- [`Config::load()`](src/config/loader.rs:20): Load configuration with environment overrides
+- [`Config::save()`](src/config/loader.rs:27): Persist settings to disk with validation
+- [`ConfigBuilder`](src/config/builder.rs:15): Fluent configuration API
 - [`compute_completion_token_budget()`](src/tokens.rs:34): Calculate optimal token allocation
 
 ---
@@ -603,13 +612,14 @@ flowchart TD
 ### 1. Adding New AI Models
 
 **Files to modify**:
-- [`src/config.rs`](src/config.rs:1) - Add new model defaults
+- [`src/config/types.rs`](src/config/types.rs:1) - Add LLM provider type
+- [`src/config/constants.rs`](src/config/constants.rs:1) - Add new model/provider defaults
 - [`src/cli/models.rs`](src/cli/models.rs:1) - Update model selection UI
 - [`src/client.rs`](src/client.rs:1) - Add model-specific handling
 
 **Example**: Adding a new provider
 ```rust
-// In src/config.rs
+// In src/config/types.rs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LlmProvider {
@@ -672,7 +682,8 @@ enum PlannerResponse {
 **Files to modify**:
 - [`src/recovery/types.rs`](src/recovery/types.rs:1) - Add new recovery types
 - [`src/recovery/ai.rs`](src/recovery/ai.rs:1) - Implement new recovery generation logic
-- [`src/config.rs`](src/config.rs:1) - Update configuration options
+- [`src/config/types.rs`](src/config/types.rs:1) - Update configuration types
+- [`src/recovery/mod.rs`](src/recovery/mod.rs:1) - Update configuration processing
 
 **Example**: Adding auto-recovery
 ```rust
