@@ -18,11 +18,13 @@
 
 ### Key Features
 - 🧠 **Natural Language to Commands**: Type plain English, get shell commands
-- 🛡️ **Safe Execution**: Every plan is previewed before execution
-- 💬 **Direct AI Chat**: Use `--chat` flag for conversational AI assistance
-- 🧠 **AI Intelligence Mode**: Use `-i` flag to explain command outputs in human-friendly terms
+- 🛡️ **Safe Execution**: Every plan is previewed before execution with confidence scoring
+- 💬 **Direct AI Chat**: Use `--chat` flag for conversational AI assistance with temperature control
+- 🧠 **AI Intelligence Mode**: Use `-i` flag to explain command outputs with question support
 - 🌐 **Provider Choice**: Switch between OpenRouter and Cerebras with `li --provider`
-- 🔧 **Interactive Setup**: Easy first-time configuration with `li --setup`
+- 🔧 **Interactive Setup**: Easy first-time configuration with automatic OpenRouter model fetching
+- 📋 **Configuration Management**: Direct configuration via CLI flags with environment variable support
+- 🔍 **Enhanced Recovery**: AI-powered alternative command suggestions and installation guidance
 
 ### Design Philosophy
 - **Safety First**: Never auto-execute without explicit user action
@@ -48,11 +50,13 @@ li/
 │   │   ├── orchestrator.rs      # Pipeline orchestration
 │   │   ├── outcome.rs           # Result types and handling
 │   │   ├── stages.rs            # Stage definitions
-│   │   └── types.rs             # Core type definitions
+│   │   ├── types.rs             # Core type definitions
+│   │   └── tests.rs             # Agent system tests
 │   ├── planner/                  # Command planning logic
-│   │   └── mod.rs               # Planning implementation
+│   │   └── mod.rs               # Planning implementation with tests
 │   ├── validator/                # Command validation system
-│   │   └── mod.rs               # Validation implementation
+│   │   ├── mod.rs               # Validation implementation
+│   │   └── tests.rs             # Validation tests
 │   ├── exec/                     # Command execution engine
 │   │   └── mod.rs               # Execution implementation
 │   ├── recovery/                 # Error recovery system
@@ -85,7 +89,7 @@ li/
 ### Core Entry Points
 
 #### [`src/main.rs`](src/main.rs:1)
-The application entry point that:
+The application entry point (52 lines) that:
 - Initializes the Tokio async runtime
 - Parses CLI arguments using `clap`
 - Handles special cases (setup, empty task, welcome message)
@@ -95,16 +99,17 @@ The application entry point that:
 **Key responsibilities**: Bootstrap, configuration loading, error handling
 
 #### [`src/cli/mod.rs`](src/cli/mod.rs:1)
-Simple module export file that re-exports the main CLI structure.
+Simple module export file (3 lines) that re-exports the main CLI structure.
 
 #### [`src/cli/runtime.rs`](src/cli/runtime.rs:1)
-The heart of the CLI system (1,236 lines) that:
+The heart of the CLI system (1,441 lines) that:
 - Defines all CLI commands and flags using `clap` derive macros
-- Handles interactive setup flows
-- Manages model selection and configuration
+- Handles interactive setup flows with OpenRouter model fetching
+- Manages model selection and configuration with interactive prompts
 - Implements the main task execution pipeline
 - Provides intelligent mode for explaining command outputs
-- Handles direct chat functionality
+- Handles direct chat functionality with temperature control
+- Includes comprehensive welcome message and usage examples
 
 **Key responsibilities**: CLI parsing, user interaction, orchestration
 
@@ -128,9 +133,9 @@ Pipeline orchestration system that:
 
 #### [`src/agent/adapters.rs`](src/agent/adapters.rs:1)
 Implementation of pipeline stage adapters:
-- `DirectPlanningAdapter`: Manages command planning
-- `CommandValidationAdapter`: Validates planned commands
-- `PlanExecutionAdapter`: Executes approved plans
+- `DirectPlanningAdapter`: Manages command planning with AI integration
+- `CommandValidationAdapter`: Validates planned commands using system checks
+- `PlanExecutionAdapter`: Executes approved plans with streaming output
 - Various noop adapters for testing and configuration
 
 #### [`src/agent/context.rs`](src/agent/context.rs:1)
@@ -142,10 +147,10 @@ Shared execution context that tracks:
 
 #### [`src/agent/stages.rs`](src/agent/stages.rs:1)
 Stage definitions for the processing pipeline:
-- `PlanningStage`: Generates command plans
-- `ValidationStage`: Checks command availability
-- `ExecutionStage`: Runs approved commands
-- `RecoveryStage`: Handles missing tools/errors
+- `PlanningStage`: Generates command plans with AI assistance
+- `ValidationStage`: Checks command availability on the system
+- `ExecutionStage`: Runs approved commands with real-time output
+- `RecoveryStage`: Handles missing tools/errors with intelligent suggestions
 
 ### AI Service Integration
 
@@ -191,17 +196,18 @@ Error recovery system that:
 ### Configuration & Utilities
 
 #### [`src/config.rs`](src/config.rs:1)
-Configuration management that:
+Configuration management (702 lines) that:
 - Handles multiple configuration formats (legacy and nested)
-- Provides environment variable overrides
+- Provides environment variable overrides for all settings
 - Manages model settings, API keys, and preferences
 - Includes comprehensive validation and defaults
+- Features extensive test coverage for configuration loading
 
 #### [`src/tokens.rs`](src/tokens.rs:1)
-Token handling utilities for:
+Token handling utilities (49 lines) for:
 - Calculating token budgets for AI requests
 - Managing context window limits
-- Optimizing API usage
+- Optimizing API usage with conservative estimates
 
 ---
 
@@ -354,18 +360,21 @@ flowchart TD
 **Purpose**: Handles all user-facing command-line interactions, argument parsing, and user experience flows.
 
 **Key Components**:
-- **CLI Parser**: Uses `clap` derive macros for comprehensive argument handling
-- **Setup Flow**: Interactive configuration wizard for first-time users
-- **Model Selection**: Dynamic model fetching when using OpenRouter
-- **Provider Selection**: Interactive switching between OpenRouter and Cerebras
-- **Intelligence Mode**: Command output explanation with AI analysis (executes commands or consumes piped stdin)
-- **Direct Chat**: Bypass planning for direct AI conversation
+- **CLI Parser**: Uses `clap` derive macros for comprehensive argument handling with subcommands
+- **Setup Flow**: Interactive configuration wizard with OpenRouter model fetching and API key validation
+- **Model Selection**: Dynamic model fetching with interactive selection and free model filtering
+- **Provider Selection**: Interactive switching between OpenRouter and Cerebras with immediate configuration saving
+- **Intelligence Mode**: Enhanced command output explanation with question support and piped input handling
+- **Direct Chat**: Bypass planning for direct AI conversation with temperature control
+- **Configuration Management**: Direct configuration via command-line flags with environment variable support
+- **Welcome Message**: Comprehensive help system with usage examples when no arguments provided
 
 **Key Functions**:
-- [`Cli::run()`](src/cli/runtime.rs:212): Main execution dispatcher
-- [`handle_setup()`](src/cli/runtime.rs:846): Interactive configuration
-- [`handle_chat_direct()`](src/cli/runtime.rs:1001): Direct AI conversation
-- [`handle_intelligence()`](src/cli/runtime.rs:1252): Command output and piped-input analysis
+- [`Cli::run()`](src/cli/runtime.rs:450): Main execution dispatcher with comprehensive argument routing
+- [`handle_setup()`](src/cli/runtime.rs:1125): Interactive configuration with provider-specific setup
+- [`handle_chat_direct()`](src/cli/runtime.rs:1171): Direct AI conversation with configurable parameters
+- [`handle_intelligence()`](src/cli/runtime.rs:1276): Enhanced command output analysis with question support
+- [`handle_config_direct()`](src/cli/runtime.rs:1063): Direct configuration management via flags
 
 ### 2. Agent Subsystem
 
@@ -478,22 +487,24 @@ flowchart TD
 - **Skip Only**: Only allow skipping failed steps
 - **Never Recover**: Disable recovery entirely
 
-### 8. Configuration Subsystem
+### 7. Configuration & Token Management
 
-**Location**: [`src/config.rs`](src/config.rs:1)
+**Location**: [`src/config.rs`](src/config.rs:1), [`src/tokens.rs`](src/tokens.rs:1)
 
-**Purpose**: Manages all aspects of application configuration and settings.
+**Purpose**: Manages all aspects of application configuration, settings, and token optimization.
 
 **Key Components**:
-- **Config Builder**: Fluent configuration API
-- **Settings Management**: LLM, model, and recovery settings
-- **Persistence**: Load/save configuration files
-- **Environment Overrides**: `OPENROUTER_API_KEY`, `CEREBRAS_API_KEY`, `LI_PROVIDER`, `LI_LLM_BASE_URL`, and other `LI_*` overrides for models/timeouts
+- **Config Builder**: Fluent configuration API with comprehensive validation
+- **Settings Management**: LLM, model, recovery, and timeout settings
+- **Persistence**: Load/save configuration files with legacy and nested format support
+- **Environment Overrides**: `OPENROUTER_API_KEY`, `CEREBRAS_API_KEY`, `LI_PROVIDER`, `LI_LLM_BASE_URL`, `LI_TIMEOUT_SECS`, `LI_MAX_TOKENS`, `LI_PLANNER_MODEL`
+- **Token Management**: Conservative token budgeting and context window optimization
 
 **Key Functions**:
-- [`Config::load()`](src/config.rs:38): Load configuration with overrides
-- [`Config::save()`](src/config.rs:53): Persist settings to disk
-- [`ConfigBuilder`](src/config.rs:216): Fluent configuration API
+- [`Config::load()`](src/config.rs:38): Load configuration with environment overrides
+- [`Config::save()`](src/config.rs:53): Persist settings to disk with validation
+- [`ConfigBuilder`](src/config.rs:245): Fluent configuration API
+- [`compute_completion_token_budget()`](src/tokens.rs:34): Calculate optimal token allocation
 
 ---
 
@@ -643,52 +654,52 @@ pub enum RecoveryResult {
 #### [`Cargo.toml`](Cargo.toml:10) Main Dependencies
 
 - **`anyhow = "1.0"`**: Error handling and context
-  - Used throughout for ergonomic error handling
-  - Provides context propagation and chainable errors
+  - Used throughout for ergonomic error handling with context propagation
+  - Provides chainable errors and debugging information
 
 - **`clap = { version = "4.5", features = ["derive"] }`**: CLI argument parsing
-  - Powers all command-line interface functionality
-  - Provides derive macros for automatic parsing
+  - Powers all command-line interface functionality with subcommands
+  - Provides derive macros for automatic parsing and help generation
 
 - **`tokio = { version = "1.40", features = ["full"] }`**: Async runtime
   - Enables asynchronous command execution and HTTP requests
-  - Provides task spawning and I/O handling
+  - Provides task spawning, I/O handling, and async process management
 
 - **`reqwest = { version = "0.12", features = ["json"] }`**: HTTP client
   - Handles LLM provider API communication (OpenRouter, Cerebras)
-  - Provides JSON serialization/deserialization
+  - Provides JSON serialization/deserialization and retry logic
 
 - **`serde = { version = "1.0", features = ["derive"] }`**: Serialization
-  - Powers configuration file handling
-  - Enables AI response parsing
+  - Powers configuration file handling with legacy and nested format support
+  - Enables AI response parsing and configuration persistence
 
 - **`serde_json = "1.0"`**: JSON handling
-  - Parses AI model responses
-  - Manages configuration persistence
+  - Parses AI model responses with robust error handling
+  - Manages configuration persistence and API communication
 
 ### Utility Dependencies
 
 - **`colored = "2.1"`**: Terminal color output
-  - Used in recovery system for better UX
-  - Provides colored text output
+  - Used in recovery system for enhanced user experience
+  - Provides colored text output with formatting options
 
 - **`dirs = "5.0"`**: Directory handling
-  - Finds user home directory for configuration
+  - Finds user home directory for configuration storage
   - Provides cross-platform directory resolution
 
 - **`async-trait = "0.1"`**: Async trait support
-  - Enables async methods in trait implementations
-  - Used in client abstraction layer
+  - Enables async methods in trait implementations for LLM clients
+  - Used in client abstraction layer and testing
 
 ### Development Dependencies
 
 - **`tempfile = "3.12"`**: Temporary file handling
-  - Used in tests for configuration testing
-  - Provides isolated test environments
+  - Used in tests for configuration testing and temporary environments
+  - Provides isolated test environments for configuration management
 
 - **`httpmock = "0.7"`**: HTTP mocking
-  - Enables comprehensive API testing
-  - Provides mock HTTP servers for testing
+  - Enables comprehensive API testing for LLM provider integrations
+  - Provides mock HTTP servers for testing client functionality
 
 ### External Services
 
@@ -747,6 +758,14 @@ pub enum AgentOutcome {
 }
 ```
 
+### 8. Future Extensibility
+
+**Placeholder Modules**: The project includes placeholder directories for future enhancements:
+- [`src/classifier/`](src/classifier/): Intended for command classification and intent detection
+- [`src/hook/`](src/hook/): Planned for command execution hooks and plugins
+
+These directories are currently empty but reserved for future architectural extensions.
+
 ---
 
 ## Conclusion
@@ -755,13 +774,16 @@ The li CLI assistant represents a sophisticated, modular architecture designed f
 
 Key architectural strengths:
 - **Modular Design**: Clear separation between CLI, agent, execution, and service layers
-- **Safety-First Approach**: Multiple validation stages and user approval requirements
+- **Safety-First Approach**: Multiple validation stages and user approval requirements with confidence scoring
 - **Extensible Pipeline**: Adapter-based system allows easy addition of new processing stages
-- **Robust Error Handling**: Comprehensive recovery system with multiple strategies
-- **Configuration Flexibility**: Multiple configuration sources with sensible defaults
+- **Robust Error Handling**: Comprehensive recovery system with AI-powered suggestions
+- **Configuration Flexibility**: Multiple configuration sources with comprehensive environment variable support
 - **Pluggable Providers**: Easy to swap hosted LLMs without changing the core pipeline
+- **Enhanced User Experience**: Interactive setup, intelligent mode, and comprehensive help system
 
-The architecture is well-positioned for future enhancements including additional AI providers and extended command capabilities while maintaining backward compatibility and user safety.
+The architecture is well-positioned for future enhancements including additional AI providers, extended command capabilities, and the planned classifier and hook systems while maintaining backward compatibility and user safety.
+
+**Current Version**: 0.1.1 (as of Cargo.toml)
 
 ---
 
